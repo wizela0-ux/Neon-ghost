@@ -1,34 +1,43 @@
 import os
+import re
 import asyncio
+import firebase_admin
+from firebase_admin import credentials, db
+
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-
-# መረጃዎችን ከ Render Environment Variables እንቀበላለን
+# Render Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL")
-# አድሚን አይዲን ከ ቴክስት ወደ ቁጥር (Integer) እንለውጠዋለን
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not BOT_TOKEN:
-    raise ValueError("❌ እባክዎ የ BOT_TOKEN Environment Variable በ Render ላይ ያስገቡ!")
+    raise ValueError("❌ BOT_TOKEN አልተገኘም!")
+
+# 1. የ Firebase Realtime Database ግንኙነት ማዋቀር
+if not firebase_admin._apps:
+    cred = credentials.Anonymous() # ወይም በ Render በኩል የለቀቁትን creds
+    firebase_admin.initialize_app(options={
+        'databaseURL': FIREBASE_DB_URL
+    })
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# የ FSM ስቴቶች (States) ለግዢ እና ሽያጭ ሂደት
-class OrderStates(StatesGroup):
-    waiting_for_usdt_amount = State()
-    waiting_for_crypto_address = State()
-    waiting_for_phone_number = State()
-    waiting_for_payment_receipt = State()
+# 2. የ FSM ስቴቶች ለ Buy USDT
+class BuyUSDTState(StatesGroup):
+    waiting_for_amount = State()
+    waiting_for_network = State()
+    waiting_for_address = State()
+    waiting_for_receipt = State()
 
-# ዋናው ማኑ ሜኑ (Main Menu Keyboards) - ከስክሪንሾቶቹ ጋር የተጣጣመ
+# 3. የዋና ሜኑ ኪቦርድ
 def get_main_menu_keyboard():
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🟢 Buy USDT | USDT መግዛት", callback_data="buy_usdt"),
             InlineKeyboardButton(text="🔴 Sell USDT | USDT መሸጥ", callback_data="sell_usdt")
@@ -52,61 +61,65 @@ def get_main_menu_keyboard():
             InlineKeyboardButton(text="📊 Bot Log", callback_data="bot_log")
         ]
     ])
-    return keyboard
 
-# የ /start ትዕዛዝ ሎጂክ
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    welcome_text = (
-        f"👋 ሰላም <b>{message.from_user.first_name}</b> እንቋዕ ደህና መጡ!\n\n"
-        "🇪🇹 <b>Ethiopian P2P Crypto & Digital Goods Marketplace</b>\n"
-        "የኢትዮጵያ P2P ክሪፕቶ እና ዲጂታል እቃዎች ማርኬት\n\n"
-        "እባክዎ ከታች ካሉት አማራጮች የሚፈልጉትን ይምረጡ፦"
-    )
-    await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
+# 4. የ Buy USDT ሂደት መነሻ (Buy USDT Callback)
+@dp.callback_query(F.data == "buy_usdt")
+async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
+    # ከ Firebase ዳታቤዝ ስቶክ እና ዋጋ ማበብ (ወደፊት በዳታቤዝ የሚገናኝ)
+    stock = 500.0  # ለሙከራ የተቀመጠ ስቶክ
+    rate = 197.0   # 1 USDT = 197 ETB
 
-# ወደ ዋናው ማኑ ሜኑ (Main Menu) መመለሻ Handler
-@dp.callback_query(F.data == "main_menu")
-async def back_to_main_menu(callback: types.CallbackQuery):
-    menu_text = "🏠 <b>ዋና ማውጫ (Main Menu):</b>\n\nእባክዎ የሚፈልጉትን አገልግሎት ከታች ይምረጡ፦"
-    await callback.message.edit_text(menu_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
-    await callback.answer()
-
-# የ My Profile ገጽ ማሳያ (ከስክሪንሾቱ ጋር የተጣጣመ)
-@dp.callback_query(F.data == "my_profile")
-async def show_my_profile(callback: types.CallbackQuery):
-    user = callback.from_user
-    profile_text = (
-        f"🛡 <b>My Profile | የእኔ መገለጫ</b>\n\n"
-        f"🆔 <b>ID:</b> {user.id}\n"
-        f"ዩዘርናም: @{user.username if user.username else 'Not set'}\n\n"
-        f"💰 <b>Balances:</b>\n"
-        f"• ETB: 0.00 ETB\n"
-        f"• USDT: 0.0000 USDT\n\n"
-        f"💳 <b>Payment Method:</b>\n"
-        f"• Bank: Telebirr\n"
-        f"• Account: 0987654321\n"
-        f"• Name: Example Name\n\n"
-        f"🔗 <b>Your referral link:</b>\n"
-        f"t.me/your_bot?start=ref_{user.id}"
+    text = (
+        "🟢 <b>Buy USDT | USDT መግዛት</b>\n\n"
+        f"💵 <b>የአሁኑ የምንዛሬ ተመን:</b> 1 USDT = {rate} ETB\n"
+        f"📦 <b>በስቶክ ላይ ያለው:</b> {stock} USDT\n"
+        "🔻 <b>ዝቅተኛ መግዣ:</b> 5 USDT\n\n"
+        "እባክዎ መግዛት የሚፈልጉትን የ USDT መጠን በቁጥር ያስገቡ፦"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit Payment Method", callback_data="edit_payment")],
-        [
-            InlineKeyboardButton(text="📦 My Orders", callback_data="my_orders"),
-            InlineKeyboardButton(text="✅ Completed History", callback_data="completed_history")
-        ],
-        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]
+        [InlineKeyboardButton(text="❌ ሰርዝ (Cancel)", callback_data="cancel_order")]
     ])
     
-    await callback.message.edit_text(profile_text, reply_markup=keyboard, parse_mode="HTML")
+    await state.set_state(BuyUSDTState.waiting_for_amount)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# ቦቱን የማስጀመር ዋና ተግባር
-async def main():
-    print("ቦቱ በአግባቡ በመጀመር ላይ ነው...")
-    await dp.start_polling(bot)
+# 5. የገባውን የ USDT መጠን ማረጋገጫ
+@dp.message(BuyUSDTState.waiting_for_amount)
+async def process_usdt_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text)
+        if amount < 5:
+            await message.answer("⚠️ ዝቅተኛው የግዢ መጠን 5 USDT ነው። እባክዎ እንደገና ያስገቡ፦")
+            return
+        
+        # መጠኑን በ FSM ሴቭ እናደርጋለን
+        await state.update_data(amount=amount)
+        
+        # የኔትወርክ መምረጫ ገጽ
+        text = (
+            f"✅ የመረጡት መጠን: <b>{amount} USDT</b>\n\n"
+            "እባክዎ USDT የሚቀበሉበትን የኔትወርክ አይነት ይምረጡ፦"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Binance Pay ID", callback_data="net_binance")],
+            [InlineKeyboardButton(text="BEP20 (BSC)", callback_data="net_bep20")],
+            [InlineKeyboardButton(text="TON Network", callback_data="net_ton")],
+            [InlineKeyboardButton(text="❌ ሰርዝ (Cancel)", callback_data="cancel_order")]
+        ])
+        
+        await state.set_state(BuyUSDTState.waiting_for_network)
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+        
+    except ValueError:
+        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ብቻ ያስገቡ (ለምሳሌ፦ 10 ወይም 25.5)፦")
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# 6. የትዕዛዝ መሰረዣ (Cancel Handler)
+@dp.callback_query(F.data == "cancel_order")
+async def cancel_order_handler(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("🛑 ትዕዛዝዎ ተሰርዟል። ወደ ዋናው ማውጫ ተመልሰዋል፦", reply_markup=get_main_menu_keyboard())
+    await callback.answer()
+
+# (የቀሩት Handlers እና Command ማነሳሻዎች...)
