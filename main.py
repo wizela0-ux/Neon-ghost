@@ -13,12 +13,17 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))  # የአድሚን ትዕዛዞች የሚላኩበት ግሩፕ ID (ለምሳሌ፦ -100xxxxxxxxxx)
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 
 # የንግድና የሰፖርት መረጃዎች
 TELEBIRR_NAME = "Aymen nesre"
 TELEBIRR_NUMBER = "0939357745"
 SUPPORT_USERNAME = "@Neon_ghost147"
+
+# የእኛ Sample የ USDT መቀበያ አድራሻዎች (ለ Sell USDT)
+OUR_BINANCE_PAY_ID = "769818165"
+OUR_BEP20_ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F"
+OUR_TON_ADDRESS = "EQA0i_4pSFiU_dQ2C9pQ1B82gM3x4Y5z6W7v8U9t0S1R2"
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN አልተገኘም!")
@@ -26,10 +31,9 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ለትዕዛዞች ጊዜያዊ ማስታወሻ መያዣ
 orders_cache = {}
 
-# FSM States ለ Buy USDT 7ቱ ስቴፖች እና ለአድሚን Reject ምክንያት
+# FSM States
 class BuyUSDTState(StatesGroup):
     waiting_for_amount = State()
     waiting_for_network = State()
@@ -37,10 +41,17 @@ class BuyUSDTState(StatesGroup):
     waiting_for_payment_method = State()
     waiting_for_receipt = State()
 
+class SellUSDTState(StatesGroup):
+    waiting_for_payout_method = State()
+    waiting_for_account_number = State()
+    waiting_for_account_name = State()
+    waiting_for_deposit_network = State()
+    waiting_for_proof = State()
+
 class AdminRejectState(StatesGroup):
     waiting_for_reason = State()
 
-# ዋናው ማኑ ሜኑ ኪቦርድ (መጀመሪያ እንደነበረው አልተነካም)
+# ዋናው ማኑ ሜኑ ኪቦርድ (አልተነካም)
 def get_main_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -67,7 +78,6 @@ def get_main_menu_keyboard():
         ]
     ])
 
-# የ /start ትዕዛዝ ሎጂክ
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     welcome_text = (
@@ -78,7 +88,6 @@ async def cmd_start(message: types.Message):
     )
     await message.answer(welcome_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
 
-# ወደ ዋናው ማኑ ሜኑ መመለሻ
 @dp.callback_query(F.data == "main_menu")
 async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -86,7 +95,6 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(menu_text, reply_markup=get_main_menu_keyboard(), parse_mode="HTML")
     await callback.answer()
 
-# የ My Profile ገጽ ማሳያ
 @dp.callback_query(F.data == "my_profile")
 async def show_my_profile(callback: types.CallbackQuery):
     user = callback.from_user
@@ -115,7 +123,6 @@ async def show_my_profile(callback: types.CallbackQuery):
     await callback.message.edit_text(profile_text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Support Handler
 @dp.callback_query(F.data == "support")
 async def show_support(callback: types.CallbackQuery):
     support_text = (
@@ -132,10 +139,9 @@ async def show_support(callback: types.CallbackQuery):
 
 
 # ==========================================
-# 🟢 BUY USDT - WORKFLOW, VALIDATION & CLEAN UI
+# 🟢 BUY USDT WORKFLOW (አልተነካም)
 # ==========================================
 
-# Step 1: Buy USDT
 @dp.callback_query(F.data == "buy_usdt")
 async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
     stock = 98.0
@@ -158,13 +164,10 @@ async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(last_msg_id=msg.message_id)
     await callback.answer()
 
-# Step 2: Amount Validation & Network Selection
 @dp.message(BuyUSDTState.waiting_for_amount)
 async def process_buy_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     last_msg_id = data.get("last_msg_id")
-    
-    # የሰውየውን ጽሁፍ አጥፍቶ ገጹን ንፁህ ማድረግ
     try:
         await message.delete()
     except Exception:
@@ -214,7 +217,6 @@ async def process_buy_amount(message: types.Message, state: FSMContext):
         if last_msg_id:
             await bot.edit_message_text("❌ እባክዎ ትክክለኛ ቁጥር ብቻ ያስገቡ (ለምሳሌ: 10)፦", chat_id=message.chat.id, message_id=last_msg_id)
 
-# Step 3: Network Choice
 @dp.callback_query(BuyUSDTState.waiting_for_network, F.data.startswith("net_"))
 async def select_network(callback: types.CallbackQuery, state: FSMContext):
     network_map = {
@@ -239,7 +241,6 @@ async def select_network(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Step 4: Strict Address Validation
 @dp.message(BuyUSDTState.waiting_for_address)
 async def process_address(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -252,7 +253,6 @@ async def process_address(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-    # Strict Validation Rules
     is_valid = True
     err_msg = ""
 
@@ -294,7 +294,6 @@ async def process_address(message: types.Message, state: FSMContext):
     if last_msg_id:
         await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
 
-# Step 5: Telebirr Payment Instructions
 @dp.callback_query(BuyUSDTState.waiting_for_payment_method, F.data == "pay_telebirr")
 async def pay_telebirr_selected(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -318,12 +317,10 @@ async def pay_telebirr_selected(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Step 6 & 7: Receipt Upload & Admin Group Notification
 @dp.message(BuyUSDTState.waiting_for_receipt, F.photo)
 async def process_receipt_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
     last_msg_id = data.get("last_msg_id")
-    
     try:
         await message.delete()
     except Exception:
@@ -341,7 +338,7 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
     user = message.from_user
     
     admin_text = (
-        f"🚨 <b>New USDT Order! (አዲስ የUSDT ትዕዛዝ)</b>\n\n"
+        f"🚨 <b>New BUY USDT Order! (አዲስ የግዢ ትዕዛዝ)</b>\n\n"
         f"👤 User: {user.full_name} (@{user.username if user.username else 'None'}, ID: <code>{user.id}</code>)\n"
         f"💵 Amount: {amount} USDT\n"
         f"💰 Pay: {total_price:,.2f} ETB\n"
@@ -382,7 +379,271 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
 
 
 # ==========================================
-# 🛡 ADMIN APPROVE / REJECT & REASON SYSTEM
+# 🔴 SELL USDT WORKFLOW (አዲሱ የ 4 Steps ፍሰት)
+# ==========================================
+
+# Step 1: Payout Method Selection
+@dp.callback_query(F.data == "sell_usdt")
+async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
+    text = (
+        "🔴 <b>Sell USDT — Step 1 of 4 | USDT መሸጥ — ደረጃ 1</b>\n\n"
+        "How would you like to receive your ETB payout?\n"
+        "ብር የሚቀበሉበትን የክፍያ መንገድ (ባንክ ወይም Telebirr/M-Pesa) ይምረጡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 Telebirr", callback_data="payout_telebirr"),
+            InlineKeyboardButton(text="📲 M-PESA", callback_data="payout_mpesa")
+        ],
+        [
+            InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="payout_cbe"),
+            InlineKeyboardButton(text="🏛 Bank of Abyssinia", callback_data="payout_abyssinia")
+        ],
+        [
+            InlineKeyboardButton(text="🦁 Awash Bank", callback_data="payout_awash")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")
+        ]
+    ])
+    await state.set_state(SellUSDTState.waiting_for_payout_method)
+    msg = await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await state.update_data(last_msg_id=msg.message_id)
+    await callback.answer()
+
+# Step 2: Account Number Request & Method Saving
+@dp.callback_query(SellUSDTState.waiting_for_payout_method, F.data.startswith("payout_"))
+async def select_payout_method(callback: types.CallbackQuery, state: FSMContext):
+    method_map = {
+        "payout_telebirr": "Telebirr",
+        "payout_mpesa": "M-PESA",
+        "payout_cbe": "CBE",
+        "payout_abyssinia": "Bank of Abyssinia",
+        "payout_awash": "Awash Bank"
+    }
+    method_name = method_map.get(callback.data, "Bank Account")
+    await state.update_data(payout_method=method_name)
+    
+    text = (
+        f"🔴 <b>Step 2 of 4 — {method_name} details | መረጃ ያስገቡ</b>\n\n"
+        f"Enter the account/phone number where you want to receive ETB via <b>{method_name}</b>:\n"
+        f"ብር የሚቀበሉበትን የ <b>{method_name}</b> ቁጥር ያስገቡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(SellUSDTState.waiting_for_account_number)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Step 2 Validation: Account Number Checking
+@dp.message(SellUSDTState.waiting_for_account_number)
+async def process_account_number(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    method = data.get("payout_method")
+    account_num = message.text.strip()
+    
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    is_valid = True
+    err_msg = ""
+
+    if method == "Telebirr":
+        if not (account_num.startswith("09") or account_num.startswith("07")) or len(account_num) != 10 or not account_num.isdigit():
+            is_valid = False
+            err_msg = "⚠️ <b>Telebirr</b> ቁጥር በ '09' ወይም '07' መጀመር እና 10 አሃዞች መሆን አለበት፦"
+    elif method == "M-PESA":
+        if not account_num.startswith("07") or len(account_num) != 10 or not account_num.isdigit():
+            is_valid = False
+            err_msg = "⚠️ <b>M-PESA</b> ቁጥር በ '07' መጀመር እና 10 አሃዞች መሆን አለበት፦"
+    elif method == "CBE":
+        if not account_num.startswith("1000") or len(account_num) != 13 or not account_num.isdigit():
+            is_valid = False
+            err_msg = "⚠️ የ <b>CBE (ንግድ ባንክ)</b> ሂሳብ ቁጥር በ '1000' መጀመር እና 13 አሃዞች መሆን አለበት፦"
+    elif method in ["Bank of Abyssinia", "Awash Bank"]:
+        if not account_num.isdigit() or len(account_num) < 8 or len(account_num) > 16:
+            is_valid = False
+            err_msg = f"⚠️ እባክዎ ትክክለኛ የ <b>{method}</b> የሂሳብ ቁጥር (8-16 ዲጂት) ያስገቡ፦"
+
+    if not is_valid:
+        if last_msg_id:
+            await bot.edit_message_text(err_msg, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        return
+
+    await state.update_data(account_num=account_num)
+    
+    text = (
+        f"👤 <b>Enter Account Holder Name | የባለቤት ስም ያስገቡ</b>\n\n"
+        f"Enter the account holder name exactly as registered with {method}:\n"
+        f"በ {method} የተመዘገበውን የባለቤቱን ሙሉ ስም ያስገቡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(SellUSDTState.waiting_for_account_name)
+    if last_msg_id:
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+
+# Step 2 Name Processing & Step 3 Deposit Network Selection
+@dp.message(SellUSDTState.waiting_for_account_name)
+async def process_account_name(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    acc_name = message.text.strip()
+    
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    if len(acc_name) < 3:
+        if last_msg_id:
+            await bot.edit_message_text("⚠️ እባክዎ ትክክለኛ ሙሉ ስም ያስገቡ፦", chat_id=message.chat.id, message_id=last_msg_id)
+        return
+
+    await state.update_data(acc_name=acc_name)
+    data = await state.get_data()
+    method = data.get("payout_method")
+    account_num = data.get("account_num")
+    
+    text = (
+        "🔴 <b>Step 3 of 4 — Choose USDT deposit method | ደረጃ 3 — USDT ማስገቢያ መንገድ ይምረጡ</b>\n\n"
+        "<b>Your ETB payout destination | የብር መቀበያ መረጃዎ፦</b>\n"
+        f"• Method: {method}\n"
+        f"• Number/Account: <code>{account_num}</code>\n"
+        f"• Name: {acc_name}\n\n"
+        "📈 <b>Sell USDT Rates:</b>\n"
+        "• 1 - 2 USDT: 170.00 ETB/USDT\n"
+        "• 2 - 5 USDT: 176.00 ETB/USDT\n"
+        "• 5+ USDT: 182.00 ETB/USDT\n\n"
+        "How will you send the USDT?\n"
+        "USDT ለእኛ በምን መንገድ ይልካሉ? (ከታች ይምረጡ)፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 Binance ID (Pay)", callback_data="deposit_binance"),
+            InlineKeyboardButton(text="💎 BSC (BEP20)", callback_data="deposit_bep20")
+        ],
+        [
+            InlineKeyboardButton(text="🌐 TON Network (USDT)", callback_data="deposit_ton")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")
+        ]
+    ])
+    await state.set_state(SellUSDTState.waiting_for_deposit_network)
+    if last_msg_id:
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+
+# Step 4: Show Our USDT Address & Ask for Screenshot Proof
+@dp.callback_query(SellUSDTState.waiting_for_deposit_network, F.data.startswith("deposit_"))
+async def select_deposit_network(callback: types.CallbackQuery, state: FSMContext):
+    net_code = callback.data
+    if net_code == "deposit_binance":
+        net_name = "Binance Pay ID"
+        our_addr = OUR_BINANCE_PAY_ID
+    elif net_code == "deposit_bep20":
+        net_name = "BSC (BEP20)"
+        our_addr = OUR_BEP20_ADDRESS
+    else:
+        net_name = "TON Network"
+        our_addr = OUR_TON_ADDRESS
+
+    await state.update_data(deposit_network=net_name, our_address=our_addr)
+    
+    text = (
+        f"🔴 <b>Step 4 of 4 — {net_name} | ደረጃ 4 — {net_name}</b>\n\n"
+        f"Send the USDT to our official {net_name}:\n"
+        f"USDT ወደዚህ የእኛ {net_name} ይላኩ፦\n\n"
+        f"<code>{our_addr}</code>\n\n"
+        "Upload a clear transfer screenshot showing the amount, status, and order ID.\n"
+        "የላኩበትን ክፍያ ግልጽ ስክሪንሾት ይላኩ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(SellUSDTState.waiting_for_proof)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Step 4 Validation & Admin Notification for SELL USDT
+@dp.message(SellUSDTState.waiting_for_proof, F.photo)
+async def process_sell_proof_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+        
+    if last_msg_id:
+        await bot.edit_message_text("🔄 Reading transfer proof for manual review...", chat_id=message.chat.id, message_id=last_msg_id)
+        
+    await asyncio.sleep(2)
+    
+    payout_method = data.get("payout_method")
+    account_num = data.get("account_num")
+    acc_name = data.get("acc_name")
+    deposit_network = data.get("deposit_network")
+    user = message.from_user
+    
+    admin_text = (
+        f"🚨 <b>New SELL USDT Order! (አዲስ የመሸጥ ትዕዛዝ)</b>\n\n"
+        f"👤 User: {user.full_name} (@{user.username if user.username else 'None'}, ID: <code>{user.id}</code>)\n"
+        f"🌐 Sent via: {deposit_network}\n"
+        f"💵 Payout Method: {payout_method}\n"
+        f"📍 Payout Account: <code>{account_num}</code>\n"
+        f"👤 Account Name: {acc_name}\n\n"
+        "የ USDT ትራንስፈር ስክሪንሾት ከታች ተያይዟል፦"
+    )
+    
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve (ብር ላክኩ)", callback_data=f"app_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject (ውድቅ አድርግ)", callback_data=f"rej_{user.id}")
+        ]
+    ])
+    
+    if ADMIN_GROUP_ID != 0:
+        try:
+            await bot.send_photo(
+                chat_id=ADMIN_GROUP_ID,
+                photo=message.photo[-1].file_id,
+                caption=admin_text,
+                reply_markup=admin_keyboard,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"Error sending to admin group: {e}")
+            
+    if last_msg_id:
+        await bot.edit_message_text(
+            "✅ <b>Transfer proof received successfully!</b>\n\n"
+            "የUSDT ትራንስፈር ማረጋገጫዎ ደርሶናል! አድሚኑ ማረጋገጫውን አይቶ የኢትዮጵያ ብር በባንክ/ቴሌብር ይልክልዎታል። እባክዎ በትዕግስት ይጠብቁ... ⏳",
+            chat_id=message.chat.id,
+            message_id=last_msg_id,
+            parse_mode="HTML"
+        )
+    await state.clear()
+
+@dp.message(SellUSDTState.waiting_for_proof)
+async def invalid_sell_proof_type(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if last_msg_id:
+        await bot.edit_message_text("⚠️ እባክዎ የትራንስፈር ስክሪንሾት (Photo) ብቻ ይላኩ፦", chat_id=message.chat.id, message_id=last_msg_id)
+
+
+# ==========================================
+# 🛡 ADMIN APPROVE / REJECT CALLBACKS
 # ==========================================
 
 @dp.callback_query(F.data.startswith("app_"))
@@ -393,7 +654,7 @@ async def admin_approve_order(callback: types.CallbackQuery):
             chat_id=user_id,
             text=(
                 "🎉 <b>ትዕዛዝዎ በተሳካ ሁኔታ ጸድቋል (Approved)!</b>\n\n"
-                "አድሚኑ ክፍያውን አረጋግጦ USDT ልኮልዎታል። ከ 5 እስከ 10 ደቂቃ ባለው ጊዜ ውስጥ አካውንትዎ ላይ ይገባል።\n"
+                "አድሚኑ ክፍያውን አረጋግጦ የኢትዮጵያ ብር በባንክ/ቴሌብር ልኮልዎታል። ከ 5 እስከ 10 ደቂቃ ባለው ጊዜ ውስጥ ይገባል።\n"
                 f"በዛ ጊዜ ውስጥ ካልደረሰዎት እባክዎ ሰፖርታችንን ያናግሩ፦ {SUPPORT_USERNAME}"
             ),
             parse_mode="HTML"
@@ -422,7 +683,6 @@ async def process_reject_reason(message: types.Message, state: FSMContext):
     admin_msg = data.get("admin_msg")
     
     try:
-        # ለተጠቃሚው ምክንያቱን እና ሰፖርት ሊንክ መላክ
         await bot.send_message(
             chat_id=user_id,
             text=(
@@ -443,18 +703,13 @@ async def process_reject_reason(message: types.Message, state: FSMContext):
         
     await state.clear()
 
-# Cancel Order Handler
 @dp.callback_query(F.data == "cancel_order")
 async def cancel_order_handler(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("🛑 ትዕዛዝዎ ተሰርዟል። ወደ ዋናው ማውጫ ተመልሰዋል፦", reply_markup=get_main_menu_keyboard())
     await callback.answer()
 
-
-# ==========================================
-# 🌐 DUMMY WEB SERVER FOR RENDER FREE TIER (PORT FIX)
-# ==========================================
-
+# Web Server for Render
 async def handle_ping(request):
     return web.Response(text="Bot is running smoothly 24/7!")
 
