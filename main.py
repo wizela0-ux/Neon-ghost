@@ -64,7 +64,7 @@ async def fb_delete(path: str):
         await session.delete(url)
 
 # ==========================================
-# ⚙️ DYNAMIC SETTINGS & DEFAULTS
+# ⚙️ DYNAMIC SETTINGS & ROLES SETUP
 # ==========================================
 DEFAULT_SETTINGS = {
     "rates": {"buy": 197.0, "sell": 182.0},
@@ -97,14 +97,21 @@ async def get_super_admin_id() -> int:
         return SUPER_ADMIN_ID
     return int(sa_id)
 
-async def is_admin(user_id: int) -> bool:
+async def get_admin_role(user_id: int) -> str:
     sa_id = await get_super_admin_id()
     if user_id == sa_id:
-        return True
-    admins = await fb_get("admins")
-    if admins and str(user_id) in admins:
-        return True
-    return False
+        return "SUPER_ADMIN"
+    admins = await fb_get("admins") or {}
+    if str(user_id) in admins:
+        admin_data = admins[str(user_id)]
+        if isinstance(admin_data, dict):
+            return admin_data.get("role", "FULL")
+        return "FULL"
+    return "NONE"
+
+async def is_admin(user_id: int) -> bool:
+    role = await get_admin_role(user_id)
+    return role != "NONE"
 
 async def save_user(user_id: int, username: str, first_name: str):
     user_data = {"username": username or "", "first_name": first_name or ""}
@@ -207,41 +214,191 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ==========================================
-# 👑 ADMIN PANEL & SETTINGS CONTROL
+# 👑 ADMIN PANEL & ROLES MANAGEMENT
 # ==========================================
 @dp.message(Command("admin"))
 async def cmd_admin_panel(message: types.Message):
-    if not await is_admin(message.from_user.id):
+    role = await get_admin_role(message.from_user.id)
+    if role == "NONE":
         return
     
-    sa_id = await get_super_admin_id()
-    is_super = (message.from_user.id == sa_id)
+    role_labels = {
+        "SUPER_ADMIN": "👑 Super Admin (Owner)",
+        "FULL": "🛡 Full Access Admin",
+        "ORDERS_SUPPORT": "📦 Orders & Support Admin",
+        "BROADCAST": "📢 Broadcaster Admin"
+    }
     
     text = (
         "👑 <b>Admin Control Panel | የአስተዳዳሪ ፓነል</b>\n\n"
-        f"<b>Your Role:</b> {'👑 Super Admin (Owner)' if is_super else '🛡 Sub-Admin'}\n\n"
+        f"<b>Your Role:</b> {role_labels.get(role, role)}\n\n"
         "እባክዎ ማስተካከል የሚፈልጉትን ይምረጡ፦"
     )
     
-    buttons = [
-        [
+    buttons = []
+    
+    # Settings Control (For Super Admin and Full Access)
+    if role in ["SUPER_ADMIN", "FULL"]:
+        buttons.append([
             InlineKeyboardButton(text="💵 Edit Rates (ተመን ቀይር)", callback_data="admin_edit_rates"),
             InlineKeyboardButton(text="🏛 Edit Banks (ባንኮች ቀይር)", callback_data="admin_edit_banks")
-        ],
-        [
+        ])
+        
+    # Broadcast Control
+    if role in ["SUPER_ADMIN", "FULL", "BROADCAST"]:
+        buttons.append([InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")])
+        
+    # Admin Management (Super Admin Only)
+    if role == "SUPER_ADMIN":
+        buttons.append([
             InlineKeyboardButton(text="📜 Admin List (የአድሚኖች ዝርዝር)", callback_data="admin_list"),
             InlineKeyboardButton(text="➕ Add Admin (አድሚን ጨምር)", callback_data="admin_add_admin")
-        ],
-        [
-            InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")
-        ]
-    ]
-    
-    if is_super:
+        ])
         buttons.append([InlineKeyboardButton(text="👑 Transfer Super Admin Ownership", callback_data="admin_transfer_super_start")])
         
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
+# Admin List
+@dp.callback_query(F.data == "admin_list")
+async def show_admin_list(callback: types.CallbackQuery):
+    role = await get_admin_role(callback.from_user.id)
+    if role != "SUPER_ADMIN":
+        await callback.answer("❌ ይህን ማየት የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
+        return
+        
+    admins = await fb_get("admins") or {}
+    sa_id = await get_super_admin_id()
+    
+    text = f"📜 <b>Admins Management List</b>\n\n👑 <b>Super Admin (Owner):</b> <code>{sa_id}</code>\n\n<b>Sub-Admins:</b>\n"
+    buttons = []
+    
+    if not admins:
+        text += "<i>ምንም የተጨመረ Sub-Admin የለም።</i>"
+    else:
+        for a_id, a_data in admins.items():
+            a_role = a_data.get("role", "FULL") if isinstance(a_data, dict) else "FULL"
+            text += f"• <code>{a_id}</code> — Role: <b>{a_role}</b>\n"
+            buttons.append([
+                InlineKeyboardButton(text=f"⚙️ Role ({a_id})", callback_data=f"edit_role_{a_id}"),
+                InlineKeyboardButton(text=f"❌ Remove ({a_id})", callback_data=f"remove_admin_{a_id}")
+            ])
+            
+    buttons.append([InlineKeyboardButton(text="🔙 Back to Admin", callback_data="admin_back")])
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+# Add Admin Workflow with Roles
+@dp.callback_query(F.data == "admin_add_admin")
+async def admin_add_admin_start(callback: types.CallbackQuery, state: FSMContext):
+    role = await get_admin_role(callback.from_user.id)
+    if role != "SUPER_ADMIN":
+        await callback.answer("❌ አዲስ አድሚን መጨመር የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
+        return
+    await state.set_state(EditSettingsState.waiting_for_new_admin_id)
+    await callback.message.edit_text("➕ አዲስ አድሚን የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦", parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_new_admin_id)
+async def process_add_new_admin_id(message: types.Message, state: FSMContext):
+    try:
+        new_admin_id = int(message.text.strip())
+        await state.update_data(new_admin_id=new_admin_id)
+        
+        text = f"👤 ለ ተጠቃሚ <code>{new_admin_id}</code> መስጠት የሚፈልጉትን **የስልጣን ደረጃ (Role)** ይምረጡ፦"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🛡 Full Access (ሁሉንም የሚቆጣጠር)", callback_data="set_role_FULL")],
+            [InlineKeyboardButton(text="📦 Orders & Support Only (ትዕዛዝ እና ድጋፍ ብቻ)", callback_data="set_role_ORDERS_SUPPORT")],
+            [InlineKeyboardButton(text="📢 Broadcaster Only (ማስታወቂያ ብቻ)", callback_data="set_role_BROADCAST")],
+            [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]
+        ])
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except ValueError:
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ብቻ ያስገቡ፦")
+
+@dp.callback_query(F.data.startswith("set_role_"))
+async def process_save_admin_role(callback: types.CallbackQuery, state: FSMContext):
+    selected_role = callback.data.replace("set_role_", "")
+    data = await state.get_data()
+    new_admin_id = data.get("new_admin_id")
+    
+    if new_admin_id:
+        await fb_put(f"admins/{new_admin_id}", {"role": selected_role, "added_at": datetime.now().strftime("%Y-%m-%d")})
+        await callback.message.edit_text(f"✅ ተጠቃሚ ID <code>{new_admin_id}</code> በ Role <b>{selected_role}</b> በአድሚንነት ተጨምሯል!", parse_mode="HTML")
+    await state.clear()
+    await callback.answer()
+
+# Edit Admin Role
+@dp.callback_query(F.data.startswith("edit_role_"))
+async def start_edit_admin_role(callback: types.CallbackQuery, state: FSMContext):
+    target_id = callback.data.replace("edit_role_", "")
+    await state.update_data(new_admin_id=target_id)
+    
+    text = f"⚙️ ለ አድሚን <code>{target_id}</code> አዲስ የስልጣን ደረጃ ይምረጡ፦"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🛡 Full Access", callback_data="set_role_FULL")],
+        [InlineKeyboardButton(text="📦 Orders & Support Only", callback_data="set_role_ORDERS_SUPPORT")],
+        [InlineKeyboardButton(text="📢 Broadcaster Only", callback_data="set_role_BROADCAST")],
+        [InlineKeyboardButton(text="🔙 Cancel", callback_data="admin_list")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Remove Admin
+@dp.callback_query(F.data.startswith("remove_admin_"))
+async def process_remove_admin(callback: types.CallbackQuery):
+    role = await get_admin_role(callback.from_user.id)
+    if role != "SUPER_ADMIN":
+        await callback.answer("❌ አድሚን ማስወገድ የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
+        return
+    rem_id = callback.data.replace("remove_admin_", "")
+    await fb_delete(f"admins/{rem_id}")
+    await callback.answer(f"✅ አድሚን {rem_id} ተወግዷል!")
+    await show_admin_list(callback)
+
+# Super Admin Transfer
+@dp.callback_query(F.data == "admin_transfer_super_start")
+async def start_transfer_super(callback: types.CallbackQuery, state: FSMContext):
+    sa_id = await get_super_admin_id()
+    if callback.from_user.id != sa_id:
+        await callback.answer("❌ ይህን ማድረግ የሚችለው ዋናው ባለቤት ብቻ ነው!", show_alert=True)
+        return
+    
+    text = "👑 <b>Transfer Super Admin Ownership</b>\n\nአዲስ Super Admin የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦"
+    await state.set_state(EditSettingsState.waiting_for_transfer_super_id)
+    await callback.message.edit_text(text, parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_transfer_super_id)
+async def ask_confirm_super_transfer(message: types.Message, state: FSMContext):
+    try:
+        new_sa_id = int(message.text.strip())
+        await state.update_data(target_new_sa_id=new_sa_id)
+        
+        text = (
+            f"⚠️ <b>ማስጠንቀቂያ! (WARNING)</b>\n\n"
+            f"የቦቱን ሙሉ ባለቤትነት (Super Admin Ownership) ለ ተጠቃሚ ID <code>{new_sa_id}</code> ማስተላለፍ ይፈልጋሉ?\n\n"
+            "<i>ይህንን ካደረጉ በኋላ የቦቱ ዋና ባለቤትነት ለአዲሱ ሰው ይተላለፋል!</i>"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ አዎ፣ ሙሉ በሙሉ አስተላልፍ", callback_data="confirm_transfer_super")],
+            [InlineKeyboardButton(text="❌ ሰርዝ (Cancel)", callback_data="cancel_order")]
+        ])
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+    except ValueError:
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ያስገቡ፦")
+
+@dp.callback_query(F.data == "confirm_transfer_super")
+async def confirm_super_transfer_action(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    new_sa_id = data.get("target_new_sa_id")
+    
+    if new_sa_id:
+        await fb_put("super_admin_id", new_sa_id)
+        await callback.message.edit_text(f"🎉 <b>የቦቱ ባለቤትነት በተሳካ ሁኔታ ወደ <code>{new_sa_id}</code> ተላልፏል!</b>", parse_mode="HTML")
+    await state.clear()
+    await callback.answer()
+
+# Settings Editing Functions
 @dp.callback_query(F.data == "admin_edit_rates")
 async def admin_edit_rates_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
@@ -301,97 +458,6 @@ async def admin_edit_banks_info(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "admin_back")
 async def admin_back_handler(callback: types.CallbackQuery):
     await cmd_admin_panel(callback.message)
-    await callback.answer()
-
-@dp.callback_query(F.data == "admin_add_admin")
-async def admin_add_admin_start(callback: types.CallbackQuery, state: FSMContext):
-    sa_id = await get_super_admin_id()
-    if callback.from_user.id != sa_id:
-        await callback.answer("❌ አዲስ አድሚን መጨመር የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
-        return
-    await state.set_state(EditSettingsState.waiting_for_new_admin_id)
-    await callback.message.edit_text("➕ አዲስ አድሚን የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦", parse_mode="HTML")
-    await callback.answer()
-
-@dp.message(EditSettingsState.waiting_for_new_admin_id)
-async def process_add_new_admin(message: types.Message, state: FSMContext):
-    try:
-        new_admin_id = int(message.text.strip())
-        await fb_put(f"admins/{new_admin_id}", True)
-        await message.answer(f"✅ ተጠቃሚ ID <code>{new_admin_id}</code> በአድሚንነት በተሳካ ሁኔታ ተጨምሯል!", parse_mode="HTML")
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ብቻ ያስገቡ፦")
-
-@dp.callback_query(F.data == "admin_list")
-async def show_admin_list(callback: types.CallbackQuery):
-    if not await is_admin(callback.from_user.id): return
-    admins = await fb_get("admins") or {}
-    sa_id = await get_super_admin_id()
-    
-    text = f"📜 <b>Admins List</b>\n\n👑 <b>Super Admin:</b> <code>{sa_id}</code>\n\n<b>Sub-Admins:</b>\n"
-    buttons = []
-    
-    for a_id in admins.keys():
-        text += f"• <code>{a_id}</code>\n"
-        if callback.from_user.id == sa_id:
-            buttons.append([InlineKeyboardButton(text=f"❌ Remove Admin {a_id}", callback_data=f"remove_admin_{a_id}")])
-            
-    buttons.append([InlineKeyboardButton(text="🔙 Back to Admin", callback_data="admin_back")])
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-    await callback.answer()
-
-@dp.callback_query(F.data.startswith("remove_admin_"))
-async def process_remove_admin(callback: types.CallbackQuery):
-    sa_id = await get_super_admin_id()
-    if callback.from_user.id != sa_id:
-        await callback.answer("❌ አድሚን ማስወገድ የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
-        return
-    rem_id = callback.data.replace("remove_admin_", "")
-    await fb_delete(f"admins/{rem_id}")
-    await callback.answer(f"✅ አድሚን {rem_id} ተወግዷል!")
-    await show_admin_list(callback)
-
-@dp.callback_query(F.data == "admin_transfer_super_start")
-async def start_transfer_super(callback: types.CallbackQuery, state: FSMContext):
-    sa_id = await get_super_admin_id()
-    if callback.from_user.id != sa_id:
-        await callback.answer("❌ ይህን ማድረግ የሚችለው ዋናው ባለቤት ብቻ ነው!", show_alert=True)
-        return
-    
-    text = "👑 <b>Transfer Super Admin Ownership</b>\n\nአዲስ Super Admin የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦"
-    await state.set_state(EditSettingsState.waiting_for_transfer_super_id)
-    await callback.message.edit_text(text, parse_mode="HTML")
-    await callback.answer()
-
-@dp.message(EditSettingsState.waiting_for_transfer_super_id)
-async def ask_confirm_super_transfer(message: types.Message, state: FSMContext):
-    try:
-        new_sa_id = int(message.text.strip())
-        await state.update_data(target_new_sa_id=new_sa_id)
-        
-        text = (
-            f"⚠️ <b>ማስጠንቀቂያ! (WARNING)</b>\n\n"
-            f"የቦቱን ሙሉ ባለቤትነት (Super Admin Ownership) ለ ተጠቃሚ ID <code>{new_sa_id}</code> ማስተላለፍ ይፈልጋሉ?\n\n"
-            "<i>ይህንን ካደረጉ በኋላ የቦቱ ዋና ባለቤትነት ለአዲሱ ሰው ይተላለፋል!</i>"
-        )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ አዎ፣ ሙሉ በሙሉ አስተላልፍ", callback_data="confirm_transfer_super")],
-            [InlineKeyboardButton(text="❌ ሰርዝ (Cancel)", callback_data="cancel_order")]
-        ])
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
-    except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ያስገቡ፦")
-
-@dp.callback_query(F.data == "confirm_transfer_super")
-async def confirm_super_transfer_action(callback: types.CallbackQuery, state: FSMContext):
-    data = await state.get_data()
-    new_sa_id = data.get("target_new_sa_id")
-    
-    if new_sa_id:
-        await fb_put("super_admin_id", new_sa_id)
-        await callback.message.edit_text(f"🎉 <b>የቦቱ ባለቤትነት በተሳካ ሁኔታ ወደ <code>{new_sa_id}</code> ተላልፏል!</b>", parse_mode="HTML")
-    await state.clear()
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_start_broadcast")
@@ -1118,6 +1184,11 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
 # ==========================================
 @dp.callback_query(F.data.startswith("app_"))
 async def admin_approve_order(callback: types.CallbackQuery):
+    role = await get_admin_role(callback.from_user.id)
+    if role not in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
+        await callback.answer("❌ ትዕዛዝ ለማጽደቅ ስልጣን የሎትም!", show_alert=True)
+        return
+        
     parts = callback.data.split("_")
     ord_key, user_id = parts[1], int(parts[2])
     
@@ -1134,6 +1205,11 @@ async def admin_approve_order(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rej_"))
 async def start_admin_reject(callback: types.CallbackQuery, state: FSMContext):
+    role = await get_admin_role(callback.from_user.id)
+    if role not in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
+        await callback.answer("❌ ትዕዛዝ ውድቅ ለማድረግ ስልጣን የሎትም!", show_alert=True)
+        return
+        
     parts = callback.data.split("_")
     ord_key, user_id = parts[1], int(parts[2])
     await state.update_data(reject_ord_key=ord_key, reject_user_id=user_id, admin_msg=callback.message)
