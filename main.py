@@ -48,6 +48,12 @@ class SellUSDTState(StatesGroup):
     waiting_for_deposit_network = State()
     waiting_for_proof = State()
 
+class TelegramPremiumState(StatesGroup):
+    waiting_for_plan = State()
+    waiting_for_username = State()
+    waiting_for_payment_method = State()
+    waiting_for_proof = State()
+
 class AdminRejectState(StatesGroup):
     waiting_for_reason = State()
 
@@ -379,10 +385,9 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
 
 
 # ==========================================
-# 🔴 SELL USDT WORKFLOW (አዲሱ የ 4 Steps ፍሰት)
+# 🔴 SELL USDT WORKFLOW (አልተነካም)
 # ==========================================
 
-# Step 1: Payout Method Selection
 @dp.callback_query(F.data == "sell_usdt")
 async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
     text = (
@@ -411,7 +416,6 @@ async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(last_msg_id=msg.message_id)
     await callback.answer()
 
-# Step 2: Account Number Request & Method Saving
 @dp.callback_query(SellUSDTState.waiting_for_payout_method, F.data.startswith("payout_"))
 async def select_payout_method(callback: types.CallbackQuery, state: FSMContext):
     method_map = {
@@ -436,7 +440,6 @@ async def select_payout_method(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Step 2 Validation: Account Number Checking
 @dp.message(SellUSDTState.waiting_for_account_number)
 async def process_account_number(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -486,9 +489,8 @@ async def process_account_number(message: types.Message, state: FSMContext):
     ])
     await state.set_state(SellUSDTState.waiting_for_account_name)
     if last_msg_id:
-        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
 
-# Step 2 Name Processing & Step 3 Deposit Network Selection
 @dp.message(SellUSDTState.waiting_for_account_name)
 async def process_account_name(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -537,9 +539,8 @@ async def process_account_name(message: types.Message, state: FSMContext):
     ])
     await state.set_state(SellUSDTState.waiting_for_deposit_network)
     if last_msg_id:
-        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
 
-# Step 4: Show Our USDT Address & Ask for Screenshot Proof
 @dp.callback_query(SellUSDTState.waiting_for_deposit_network, F.data.startswith("deposit_"))
 async def select_deposit_network(callback: types.CallbackQuery, state: FSMContext):
     net_code = callback.data
@@ -570,7 +571,6 @@ async def select_deposit_network(callback: types.CallbackQuery, state: FSMContex
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Step 4 Validation & Admin Notification for SELL USDT
 @dp.message(SellUSDTState.waiting_for_proof, F.photo)
 async def process_sell_proof_photo(message: types.Message, state: FSMContext):
     data = await state.get_data()
@@ -643,6 +643,226 @@ async def invalid_sell_proof_type(message: types.Message, state: FSMContext):
 
 
 # ==========================================
+# 💎 TELEGRAM PREMIUM WORKFLOW (አዲሱ ፍሰት)
+# ==========================================
+
+# Step 1: Choose Subscription Plan
+@dp.callback_query(F.data == "telegram_premium")
+async def start_telegram_premium(callback: types.CallbackQuery, state: FSMContext):
+    text = (
+        "💎 <b>Telegram Premium</b>\n\n"
+        "Choose the subscription plan you want to purchase:\n"
+        "እባክዎ መግዛት የሚፈልጉትን የፕሪሚየም ጊዜ ይምረጡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✈️ 3 Months — 2,600 ETB", callback_data="prem_3_months")],
+        [InlineKeyboardButton(text="✈️ 6 Months — 3,700 ETB", callback_data="prem_6_months")],
+        [InlineKeyboardButton(text="✈️ 12 Months — 6,000 ETB", callback_data="prem_12_months")],
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(TelegramPremiumState.waiting_for_plan)
+    msg = await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await state.update_data(last_msg_id=msg.message_id)
+    await callback.answer()
+
+# Step 2: Username Request & Plan Saving
+@dp.callback_query(TelegramPremiumState.waiting_for_plan, F.data.startswith("prem_"))
+async def select_premium_plan(callback: types.CallbackQuery, state: FSMContext):
+    plan_data = {
+        "prem_3_months": ("3 Months", "2,600"),
+        "prem_6_months": ("6 Months", "3,700"),
+        "prem_12_months": ("12 Months", "6,000")
+    }
+    plan_name, price = plan_data.get(callback.data, ("3 Months", "2,600"))
+    await state.update_data(plan_name=plan_name, price=price)
+    
+    text = (
+        f"✈️ <b>Telegram Premium — {plan_name}</b>\n\n"
+        "Send the Telegram username that will receive Premium.\n"
+        "ፕሪሚየም የሚገባበትን የቴሌግራም ዩዘርኔም ያስገቡ (ምሳሌ: @username ወይም username)፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(TelegramPremiumState.waiting_for_username)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Step 2 Validation: Username Checking (Flexibility for @ or Without @)
+@dp.message(TelegramPremiumState.waiting_for_username)
+async def process_premium_username(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    raw_username = message.text.strip()
+    
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Clean Username Format (@ ቢኖርም ባይኖርም ማስተካከል)
+    clean_username = raw_username if raw_username.startswith("@") else f"@{raw_username}"
+    username_without_at = clean_username[1:]
+
+    # Telegram Username Legal Rules (5-32 chars, letters, digits, underscore)
+    if not re.match(r"^[a-zA-Z0-9_]{5,32}$", username_without_at):
+        if last_msg_id:
+            await bot.edit_message_text(
+                "⚠️ <b>የተሳሳተ ዩዘርኔም!</b>\n\nእባክዎ ትክክለኛ የቴሌግራም ዩዘርኔም ያስገቡ (ቢያንስ 5 ፊደላት/ቁጥሮች መሆን አለበት)፦",
+                chat_id=message.chat.id,
+                message_id=last_msg_id,
+                parse_mode="HTML"
+            )
+        return
+
+    await state.update_data(target_username=clean_username)
+    plan_name = data.get("plan_name")
+    price = data.get("price")
+
+    text = (
+        f"✈️ <b>{plan_name} Telegram Premium</b>\n"
+        f"👤 Recipient: <b>{clean_username}</b>\n"
+        f"💰 Amount to pay: <b>{price}.00 ETB</b>\n\n"
+        "እባክዎ ክፍያ የሚፈፅሙበትን የባንክ/ቴሌብር መንገድ ይምረጡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 Telebirr", callback_data="prem_pay_telebirr"),
+            InlineKeyboardButton(text="📲 M-PESA", callback_data="prem_pay_mpesa")
+        ],
+        [
+            InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="prem_pay_cbe"),
+            InlineKeyboardButton(text="🏛 Bank of Abyssinia", callback_data="prem_pay_abyssinia")
+        ],
+        [
+            InlineKeyboardButton(text="🦁 Awash Bank", callback_data="prem_pay_awash")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")
+        ]
+    ])
+    await state.set_state(TelegramPremiumState.waiting_for_payment_method)
+    if last_msg_id:
+        await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+
+# Step 3: Payment Method Instruction
+@dp.callback_query(TelegramPremiumState.waiting_for_payment_method, F.data.startswith("prem_pay_"))
+async def process_premium_payment_method(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    plan_name = data.get("plan_name")
+    price = data.get("price")
+    target_username = data.get("target_username")
+    
+    pay_code = callback.data
+    if pay_code == "prem_pay_telebirr":
+        bank_name = "Telebirr"
+        acc_num = TELEBIRR_NUMBER
+        acc_name = TELEBIRR_NAME
+    elif pay_code == "prem_pay_mpesa":
+        bank_name = "M-PESA"
+        acc_num = "0712345678"
+        acc_name = "Aymen nesre"
+    elif pay_code == "prem_pay_cbe":
+        bank_name = "CBE (ንግድ ባንክ)"
+        acc_num = "1000123456789"
+        acc_name = "Aymen nesre"
+    elif pay_code == "prem_pay_abyssinia":
+        bank_name = "Bank of Abyssinia"
+        acc_num = "87654321"
+        acc_name = "Aymen nesre"
+    else:
+        bank_name = "Awash Bank"
+        acc_num = "01320123456789"
+        acc_name = "Aymen nesre"
+
+    text = (
+        f"✈️ <b>Telegram Premium {plan_name}</b>\n"
+        f"👤 Recipient: <b>{target_username}</b>\n"
+        f"💰 Amount to pay: <b>{price}.00 ETB</b>\n\n"
+        f"🏛 <b>{bank_name} Payment Info</b>\n\n"
+        f"Number/Account: <b>{acc_num}</b>\n"
+        f"Name: <b>{acc_name}</b>\n\n"
+        "Send the exact ETB amount, then upload a clear receipt screenshot.\n"
+        "ትክክለኛውን የብር መጠን ከፍለው ግልጽ የክፍያ ደረሰኝ ስክሪንሾት ይላኩ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+    ])
+    await state.set_state(TelegramPremiumState.waiting_for_proof)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Step 4: Receipt Upload & Admin Group Notification for Premium
+@dp.message(TelegramPremiumState.waiting_for_proof, F.photo)
+async def process_premium_proof_photo(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+        
+    if last_msg_id:
+        await bot.edit_message_text("🔄 Processing payment proof...", chat_id=message.chat.id, message_id=last_msg_id)
+        
+    await asyncio.sleep(2)
+    
+    plan_name = data.get("plan_name")
+    price = data.get("price")
+    target_username = data.get("target_username")
+    user = message.from_user
+    
+    admin_text = (
+        f"💎 <b>New Telegram Premium Order!</b>\n\n"
+        f"👤 Customer: {user.full_name} (@{user.username if user.username else 'None'}, ID: <code>{user.id}</code>)\n"
+        f"✈️ Plan: {plan_name}\n"
+        f"💵 Price: {price} ETB\n"
+        f"🎯 Target Account: <b>{target_username}</b>\n\n"
+        "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
+    )
+    
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve (ፕሪሚየም ተጫነ)", callback_data=f"app_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject (ውድቅ አድርግ)", callback_data=f"rej_{user.id}")
+        ]
+    ])
+    
+    if ADMIN_GROUP_ID != 0:
+        try:
+            await bot.send_photo(
+                chat_id=ADMIN_GROUP_ID,
+                photo=message.photo[-1].file_id,
+                caption=admin_text,
+                reply_markup=admin_keyboard,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            print(f"Error sending to admin group: {e}")
+            
+    if last_msg_id:
+        await bot.edit_message_text(
+            "✅ <b>Payment proof received successfully!</b>\n\n"
+            f"የክፍያ ማረጋገጫዎ ደርሶናል! ፕሪሚየሙ በቅርቡ ወደ <b>{target_username}</b> ይጫናል። እባክዎ በትዕግስት ይጠብቁ... ⏳",
+            chat_id=message.chat.id,
+            message_id=last_msg_id,
+            parse_mode="HTML"
+        )
+    await state.clear()
+
+@dp.message(TelegramPremiumState.waiting_for_proof)
+async def invalid_premium_proof_type(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    if last_msg_id:
+        await bot.edit_message_text("⚠️ እባክዎ የክፍያ ስክሪንሾት (Photo) ብቻ ይላኩ፦", chat_id=message.chat.id, message_id=last_msg_id)
+
+
+# ==========================================
 # 🛡 ADMIN APPROVE / REJECT CALLBACKS
 # ==========================================
 
@@ -654,8 +874,8 @@ async def admin_approve_order(callback: types.CallbackQuery):
             chat_id=user_id,
             text=(
                 "🎉 <b>ትዕዛዝዎ በተሳካ ሁኔታ ጸድቋል (Approved)!</b>\n\n"
-                "አድሚኑ ክፍያውን አረጋግጦ የኢትዮጵያ ብር በባንክ/ቴሌብር ልኮልዎታል። ከ 5 እስከ 10 ደቂቃ ባለው ጊዜ ውስጥ ይገባል።\n"
-                f"በዛ ጊዜ ውስጥ ካልደረሰዎት እባክዎ ሰፖርታችንን ያናግሩ፦ {SUPPORT_USERNAME}"
+                "አድሚኑ ክፍያውን አረጋግጦ አገልግሎትዎን ልኮልዎታል። ቦቱን ስለተጠቀሙ እናመሰግናለን! 🙏\n"
+                f"ችግር ካጋጠመዎት ሰፖርታችንን ያናግሩ፦ {SUPPORT_USERNAME}"
             ),
             parse_mode="HTML"
         )
