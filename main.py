@@ -6,11 +6,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# መረጃዎችን በቀጥታ ከ Render Environment Variables እንቀበላለን (ደህንነቱ የተጠበቀ)
+
+# መረጃዎችን ከ Render Environment Variables እንቀበላለን
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL")
+# አድሚን አይዲን ከ ቴክስት ወደ ቁጥር (Integer) እንለውጠዋለን
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# ቶከኑ በትክክል መምጣቱን ለማረጋገጥ (Security Check)
 if not BOT_TOKEN:
     raise ValueError("❌ እባክዎ የ BOT_TOKEN Environment Variable በ Render ላይ ያስገቡ!")
 
