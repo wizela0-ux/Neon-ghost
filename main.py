@@ -94,6 +94,7 @@ dp.callback_query.middleware(BlockCheckMiddleware())
 # ==========================================
 DEFAULT_SETTINGS = {
     "rates": {"buy": 197.0, "sell": 182.0},
+    "working_hours": "08:00–22:00 EAT",
     "product_prices": {
         "prem_3m": 2600.0,
         "prem_6m": 3700.0,
@@ -133,6 +134,7 @@ async def get_settings():
     if "banks" not in settings: settings["banks"] = DEFAULT_SETTINGS["banks"]
     if "crypto" not in settings: settings["crypto"] = DEFAULT_SETTINGS["crypto"]
     if "rates" not in settings: settings["rates"] = DEFAULT_SETTINGS["rates"]
+    if "working_hours" not in settings: settings["working_hours"] = DEFAULT_SETTINGS["working_hours"]
     if "product_prices" not in settings: settings["product_prices"] = DEFAULT_SETTINGS["product_prices"]
     
     clean_banks = {}
@@ -193,7 +195,6 @@ def get_all_users_sync_list(users_dict):
         return []
     return list(users_dict.keys())
 
-# Helper for Stock Broadcasts
 async def broadcast_stock_update(text_msg: str, btn_text: str, btn_callback: str):
     users_dict = await fb_get("users") or {}
     user_ids = get_all_users_sync_list(users_dict)
@@ -208,7 +209,6 @@ async def broadcast_stock_update(text_msg: str, btn_text: str, btn_callback: str
         except Exception:
             pass
 
-# Dynamic Banks Keyboard Generator
 def build_banks_keyboard(banks_dict: dict, callback_prefix: str) -> InlineKeyboardMarkup:
     buttons = []
     row = []
@@ -277,6 +277,7 @@ class BroadcastState(StatesGroup):
 class EditSettingsState(StatesGroup):
     waiting_for_buy_rate = State()
     waiting_for_sell_rate = State()
+    waiting_for_working_hours = State()
     waiting_for_new_admin_id = State()
     waiting_for_transfer_super_id = State()
     waiting_for_stock_usdt = State()
@@ -292,7 +293,6 @@ class EditSettingsState(StatesGroup):
     waiting_for_new_bank_num = State()
     waiting_for_prod_price_val = State()
 
-# Clean Main Menu Keyboard
 async def get_main_menu_keyboard():
     settings = await get_settings()
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
@@ -420,10 +420,16 @@ async def cmd_admin_panel(message: types.Message):
             InlineKeyboardButton(text="📦 Edit Stocks & Reserves", callback_data="admin_edit_stocks"),
             InlineKeyboardButton(text="🏛 Edit Banks & Crypto", callback_data="admin_edit_banks")
         ])
-        buttons.append([InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")])
+        buttons.append([
+            InlineKeyboardButton(text="🕒 Edit Working Hours", callback_data="admin_edit_hours"),
+            InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")
+        ])
         
     if role in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
-        buttons.append([InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats")])
+        buttons.append([
+            InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats"),
+            InlineKeyboardButton(text="📦 Orders Management", callback_data="admin_orders_menu")
+        ])
 
     if role in ["SUPER_ADMIN", "FULL", "BROADCAST"]:
         buttons.append([InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")])
@@ -454,9 +460,9 @@ async def admin_back_handler(callback: types.CallbackQuery, state: FSMContext):
     if role in ["SUPER_ADMIN", "FULL"]:
         buttons.append([InlineKeyboardButton(text="💵 Edit Rates", callback_data="admin_edit_rates"), InlineKeyboardButton(text="🏷 Edit Product Prices", callback_data="admin_edit_product_prices")])
         buttons.append([InlineKeyboardButton(text="📦 Edit Stocks & Reserves", callback_data="admin_edit_stocks"), InlineKeyboardButton(text="🏛 Edit Banks & Crypto", callback_data="admin_edit_banks")])
-        buttons.append([InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")])
+        buttons.append([InlineKeyboardButton(text="🕒 Edit Working Hours", callback_data="admin_edit_hours"), InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")])
     if role in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
-        buttons.append([InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats")])
+        buttons.append([InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats"), InlineKeyboardButton(text="📦 Orders Management", callback_data="admin_orders_menu")])
     if role in ["SUPER_ADMIN", "FULL", "BROADCAST"]:
         buttons.append([InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")])
     if role == "SUPER_ADMIN":
@@ -466,6 +472,134 @@ async def admin_back_handler(callback: types.CallbackQuery, state: FSMContext):
     buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
+
+# ==========================================
+# 📦 ORDERS MANAGEMENT DASHBOARD (Pending, Approved, Rejected)
+# ==========================================
+@dp.callback_query(F.data == "admin_orders_menu")
+async def show_admin_orders_menu(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    text = "📦 <b>Orders Management Dashboard</b>\n\nየማየት የሚፈልጉትን የትዕዛዝ ሁኔታ (Status) ይምረጡ፦"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏳ Pending Orders (ያልጸደቁ)", callback_data="ord_list_PENDING")],
+        [InlineKeyboardButton(text="✅ Approved Orders (ጸድቀዋል)", callback_data="ord_list_APPROVED")],
+        [InlineKeyboardButton(text="❌ Rejected Orders (ውድቅ)", callback_data="ord_list_REJECTED")],
+        [InlineKeyboardButton(text="🔙 Back to Admin Panel", callback_data="admin_back")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("ord_list_"))
+async def show_specific_orders_list(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    status_filter = callback.data.replace("ord_list_", "")
+    
+    orders = await fb_get("orders") or {}
+    filtered = []
+    for o_key, o_val in orders.items():
+        if isinstance(o_val, dict) and o_val.get("status") == status_filter:
+            filtered.append((o_key, o_val))
+            
+    titles = {
+        "PENDING": "⏳ Pending Orders (ያልጸደቁ)",
+        "APPROVED": "✅ Approved Orders (ጸድቀዋል)",
+        "REJECTED": "❌ Rejected Orders (ውድቅ የተደረጉ)"
+    }
+    
+    text = f"📦 <b>{titles.get(status_filter, status_filter)} ({len(filtered)})</b>\n\nዝርዝር ለማየት ከታች ካሉት ትዕዛዞች አንዱን ይምረጡ፦"
+    buttons = []
+    
+    for o_key, o_val in filtered[-10:]: # Recent 10 orders
+        s_name = o_val.get("service", "Order")
+        amt = o_val.get("amount", 0.0)
+        u_name = o_val.get("user_name", "User")
+        buttons.append([InlineKeyboardButton(text=f"#{o_key[:6]} | {s_name} | {amt:,.0f} ETB", callback_data=f"ord_view_{o_key}")])
+        
+    buttons.append([InlineKeyboardButton(text="🔙 Back to Orders Menu", callback_data="admin_orders_menu")])
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("ord_view_"))
+async def view_single_admin_order(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    ord_key = callback.data.replace("ord_view_", "")
+    ord_val = await fb_get(f"orders/{ord_key}")
+    
+    if not ord_val or not isinstance(ord_val, dict):
+        await callback.answer("⚠️ ትዕዛዙ አልተገኘም!", show_alert=True)
+        return
+        
+    u_id = ord_val.get("user_id")
+    u_name = ord_val.get("user_name", "Unknown")
+    service = ord_val.get("service", "")
+    amount = ord_val.get("amount", 0.0)
+    status = ord_val.get("status", "PENDING")
+    details = ord_val.get("details", "")
+    created_at = ord_val.get("created_at", "")
+    
+    text = (
+        f"📑 <b>Order Details (#{ord_key[:6]})</b>\n\n"
+        f"• <b>Status:</b> {status}\n"
+        f"• <b>Service:</b> {service}\n"
+        f"• <b>Customer:</b> {u_name} (ID: <code>{u_id}</code>)\n"
+        f"• <b>Amount:</b> {amount:,.2f} ETB\n"
+        f"• <b>Details:</b> {details}\n"
+        f"• <b>Created At:</b> {created_at}"
+    )
+    
+    buttons = []
+    if status == "PENDING":
+        buttons.append([
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{u_id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{u_id}")
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="🗑 Delete Order", callback_data=f"ord_del_{ord_key}"),
+        InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{u_id}")
+    ])
+    buttons.append([InlineKeyboardButton(text="🔙 Back to List", callback_data=f"ord_list_{status}")])
+    
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("ord_del_"))
+async def delete_admin_order(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    ord_key = callback.data.replace("ord_del_", "")
+    ord_val = await fb_get(f"orders/{ord_key}")
+    if ord_val and isinstance(ord_val, dict):
+        u_id = ord_val.get("user_id")
+        await fb_delete(f"orders/{ord_key}")
+        if u_id:
+            await fb_delete(f"user_orders/{u_id}/{ord_key}")
+    await callback.answer("✅ ትዕዛዙ ከታሪክ ተሰርዟል!", show_alert=True)
+    await show_admin_orders_menu(callback)
+
+# EDIT WORKING HOURS
+@dp.callback_query(F.data == "admin_edit_hours")
+async def start_edit_working_hours(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id): return
+    settings = await get_settings()
+    curr_hours = settings.get("working_hours", "08:00–22:00 EAT")
+    
+    await state.set_state(EditSettingsState.waiting_for_working_hours)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_back")]])
+    await callback.message.edit_text(
+        f"🕒 የአሁኑ የስራ ሰዓት፦ <b>{curr_hours}</b>\n\nአዲሱን የስራ ሰዓት ያስገቡ (ምሳሌ: <code>09:00 - 23:00 EAT</code> ወይም <code>24/7 Open</code>)፦",
+        reply_markup=kb, parse_mode="HTML"
+    )
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_working_hours)
+async def process_new_working_hours(message: types.Message, state: FSMContext):
+    new_hours = message.text.strip()
+    settings = await get_settings()
+    settings["working_hours"] = new_hours
+    await fb_put("settings", settings)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer(f"✅ የስራ ሰዓቱ በተሳካ ሁኔታ ወደ <b>{new_hours}</b> ተቀይሯል!", reply_markup=kb, parse_mode="HTML")
+    await state.clear()
 
 # EDIT PRODUCT PRICES MANAGEMENT
 @dp.callback_query(F.data == "admin_edit_product_prices")
@@ -602,7 +736,6 @@ async def process_stock_usdt(message: types.Message, state: FSMContext):
         settings["stocks"]["usdt"] = val
         await fb_put("settings", settings)
         
-        # Broadcast stock update
         await broadcast_stock_update(
             f"🟢 <b>USDT Stock Update!</b>\n\nአሁን አዲስ የ <b>{val} USDT</b> ስቶክ ተጭኗል! አሁኑኑ ይግዙ።",
             "🟢 Buy USDT Now", "buy_usdt"
@@ -1191,10 +1324,13 @@ async def show_completed_history(callback: types.CallbackQuery):
 # ==========================================
 @dp.callback_query(F.data == "support")
 async def show_support(callback: types.CallbackQuery):
+    settings = await get_settings()
+    working_hours = settings.get("working_hours", "08:00–22:00 EAT")
+    
     support_text = (
         "⁉️ <b>Customer Support | የደንበኞች አገልግሎት</b>\n\n"
         "ማንኛውም ጥያቄ፣ አስተያየት ወይም የክፍያ ችግር ካጋጠመዎት ከታች ያለውን <b>Message Admin Inside Bot</b> ቁልፍ በመጫን ቀጥታ ለአድሚን ይጻፉ፦\n\n"
-        "🕒 <b>Working hours:</b> 08:00–22:00 EAT"
+        f"🕒 <b>Working hours:</b> {working_hours}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📍 Message Admin Inside Bot", callback_data="msg_admin_start")],
@@ -1602,7 +1738,7 @@ async def process_account_name(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
     ])
     await state.set_state(SellUSDTState.waiting_for_deposit_network)
-    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 @dp.callback_query(SellUSDTState.waiting_for_deposit_network, F.data.startswith("deposit_"))
 async def select_deposit_network(callback: types.CallbackQuery, state: FSMContext):
@@ -2028,7 +2164,7 @@ async def process_gemini_payment_info(callback: types.CallbackQuery, state: FSMC
     bank_info = banks.get(pay_code, {})
     if isinstance(bank_info, dict):
         b_name = bank_info.get("name", pay_code.upper())
-        b_emoji = bank_info.get("emoji", "🏛")
+        b_emoji = render_emoji(bank_info.get("emoji"), "🏛") if 'render_emoji' in globals() else bank_info.get("emoji", "🏛")
         if str(b_emoji).isdigit(): b_emoji = "🏛"
         b_acc = bank_info.get("number", "N/A")
         b_owner = bank_info.get("owner", "N/A")
@@ -2215,6 +2351,9 @@ async def cancel_order_handler(callback: types.CallbackQuery, state: FSMContext)
 
 @dp.callback_query(F.data == "help")
 async def show_help(callback: types.CallbackQuery):
+    settings = await get_settings()
+    working_hours = settings.get("working_hours", "08:00–22:00 EAT")
+    
     help_text = (
         "⁉️ <b>Help | እርዳታ</b>\n\n"
         "<b>User commands:</b>\n"
@@ -2222,7 +2361,7 @@ async def show_help(callback: types.CallbackQuery):
         "/rates — Check buy and sell rates\n"
         "/stocks — Check available stocks\n"
         "/cancel — Cancel current action\n\n"
-        "<b>Working hours:</b> 08:00–22:00 EAT\n"
+        f"<b>Working hours:</b> {working_hours}\n"
         "<b>Support:</b> Use the Support button below 🎯"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
