@@ -226,7 +226,7 @@ def get_main_menu_keyboard():
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     welcome_text = (
-        f"👋 ሰላም <b>{message.from_user.first_name}</b> እንቋዕ ደህና መጡ!\n\n"
+        f"👋 ሰላም <b>{message.from_user.first_name}</b> እንኳን ደህና መጡ!\n\n"
         "🇪🇹 <b>Ethiopian P2P Crypto & Digital Goods Marketplace</b>\n"
         "የኢትዮጵያ P2P ክሪፕቶ እና ዲጂታል እቃዎች ማርኬት\n\n"
         "እባክዎ ከታች ካሉት አማራጮች የሚፈልጉትን ይምረጡ፦"
