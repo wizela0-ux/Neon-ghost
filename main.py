@@ -64,7 +64,7 @@ async def fb_delete(path: str):
         await session.delete(url)
 
 # ==========================================
-# ⚙️ DYNAMIC SETTINGS & ROLES SETUP
+# ⚙️ DYNAMIC SETTINGS & CUSTOM EMOJI IDS
 # ==========================================
 DEFAULT_SETTINGS = {
     "rates": {"buy": 197.0, "sell": 182.0},
@@ -82,17 +82,30 @@ DEFAULT_SETTINGS = {
         "gemini_pro": 34
     },
     "banks": {
-        "telebirr": {"name": "Telebirr", "emoji": "📱", "owner": "Aymen Nesredin Redi", "number": "0939357745"},
-        "cbe": {"name": "CBE (ንግድ ባንክ)", "emoji": "🏦", "owner": "Aymen Nesredin Redi", "number": "1000780294322"},
-        "coop": {"name": "COOP Bank", "emoji": "🌿", "owner": "Aymen Nesredin Redi", "number": "1947701000001"},
-        "awash": {"name": "Awash Bank", "emoji": "🌊", "owner": "Nesredin Redi", "number": "01425174740300"},
-        "abyssinia": {"name": "Bank of Abyssinia", "emoji": "🦁", "owner": "Nesredin Redi", "number": "100404915"},
-        "dashen": {"name": "Dashen Bank", "emoji": "⛰", "owner": "Nesredin Redi", "number": "2912539951521"}
+        "telebirr": {"name": "Telebirr", "emoji": "5796366529855494419", "owner": "Aymen Nesredin Redi", "number": "0939357745"},
+        "cbe": {"name": "CBE (ንግድ ባንክ)", "emoji": "5796436189930069862", "owner": "Aymen Nesredin Redi", "number": "1000780294322"},
+        "coop": {"name": "COOP Bank", "emoji": "5796401744292354501", "owner": "Aymen Nesredin Redi", "number": "1947701000001"},
+        "awash": {"name": "Awash Bank", "emoji": "5796252438344244434", "owner": "Nesredin Redi", "number": "01425174740300"},
+        "abyssinia": {"name": "Bank of Abyssinia", "emoji": "5796558527778527912", "owner": "Nesredin Redi", "number": "100404915"},
+        "dashen": {"name": "Dashen Bank", "emoji": "5796636442780244593", "owner": "Nesredin Redi", "number": "2912539951521"},
+        "mpesa": {"name": "M-PESA", "emoji": "5796375089725315018", "owner": "Aymen Nesredin Redi", "number": "0700000000"}
     },
     "crypto": {
         "bybit_uid": "580130044",
+        "bybit_emoji": "5269673041079574131",
         "polygon_address": "0x9244d02e10124bfa091d1d5c25a4aed204833ad7",
-        "bep20_address": "0x9244d02e10124bfa091d1d5c25a4aed204833ad7"
+        "polygon_emoji": "5287429921939924412",
+        "bep20_address": "0x9244d02e10124bfa091d1d5c25a4aed204833ad7",
+        "binance_emoji": "5345775235884917632"
+    },
+    "product_emojis": {
+        "telegram": "5345970124320941088",
+        "gemini": "5951817721468424817",
+        "buy": "5287328268653960659"
+    },
+    "verification_emojis": {
+        "blue": "6147524086768604985",
+        "red": "6147565374289220368"
     }
 }
 
@@ -118,7 +131,7 @@ async def get_settings():
             if ("Nesredin" in name_val or "Redi" in name_val or "Aymen" in name_val) and b_key in DEFAULT_SETTINGS["banks"]:
                 clean_banks[b_key] = {
                     "name": DEFAULT_SETTINGS["banks"][b_key]["name"],
-                    "emoji": DEFAULT_SETTINGS["banks"][b_key].get("emoji", "🏛"),
+                    "emoji": DEFAULT_SETTINGS["banks"][b_key].get("emoji", emoji_val),
                     "owner": name_val if "Nesredin" in name_val else owner_val,
                     "number": str(b_info.get("number", ""))
                 }
@@ -132,7 +145,7 @@ async def get_settings():
     settings["banks"] = clean_banks
     return settings
 
-# Helper for rendering Emojis or Custom Emoji IDs in HTML Message text
+# Helper for rendering Emojis or Custom Emoji IDs in Message Text Body
 def render_emoji(emoji_val: str, default="🏛") -> str:
     if not emoji_val:
         return default
@@ -141,7 +154,7 @@ def render_emoji(emoji_val: str, default="🏛") -> str:
         return f'<tg-emoji emoji-id="{emoji_val}">⭐</tg-emoji>'
     return emoji_val
 
-# Helper for Button Labels (Inline Keyboard doesn't support html tags)
+# Helper for Button Icons
 def get_btn_icon(emoji_val: str, default="🏛") -> str:
     if not emoji_val or str(emoji_val).strip().isdigit():
         return default
@@ -262,7 +275,7 @@ class EditSettingsState(StatesGroup):
     waiting_for_new_bank_num = State()
     waiting_for_prod_price_val = State()
 
-# YT Store Styled Main Menu Keyboard
+# Clean Main Menu Keyboard (Without Balance Button)
 async def get_main_menu_keyboard():
     settings = await get_settings()
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
@@ -276,26 +289,27 @@ async def get_main_menu_keyboard():
         [InlineKeyboardButton(text="✈️ Telegram Premium", callback_data="telegram_premium")],
         [InlineKeyboardButton(text=f"✨ Gemini Pro 18m ({gemini_p:,.0f} ETB)", callback_data="gemini_pro")],
         [InlineKeyboardButton(text=f"🌐 Monthly Unlimited Data ({data_p:,.0f} ETB)", callback_data="unlimited_data")],
-        [
-            InlineKeyboardButton(text="🏠 My Profile / History", callback_data="my_profile"),
-            InlineKeyboardButton(text="💳 Balance | ሂሳብ", callback_data="my_profile")
-        ],
+        [InlineKeyboardButton(text="🏠 My Profile / History | መግለጫ", callback_data="my_profile")],
         [
             InlineKeyboardButton(text="🥊 Support | ድጋፍ", callback_data="support"),
             InlineKeyboardButton(text="🥊 Help | እርዳታ", callback_data="help")
         ]
     ])
 
-# 🔵 Animated Telegram Premium Verification Badge Custom Emoji ID
-VERIFY_BADGE_ID = "5427007290130630526"
+# 🔵 Blue & Red Verification Badge IDs
+BLUE_VERIFY_ID = "6147524086768604985"
+RED_VERIFY_ID = "6147565374289220368"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-    verify_badge_html = f'<tg-emoji emoji-id="{VERIFY_BADGE_ID}">☑️</tg-emoji>'
+    
+    blue_badge_html = f'<tg-emoji emoji-id="{BLUE_VERIFY_ID}">☑️</tg-emoji>'
+    red_badge_html = f'<tg-emoji emoji-id="{RED_VERIFY_ID}">🔴</tg-emoji>'
+    
     welcome_text = (
-        f"👋 ሰላም <b>{message.from_user.first_name}</b> {verify_badge_html} እንኳን ደህና መጡ!\n\n"
-        f"🇪🇹 <b>YT Store — Ethiopian P2P Marketplace</b> {verify_badge_html}\n"
+        f"👋 ሰላም <b>{message.from_user.first_name}</b> {blue_badge_html} እንኳን ደህና መጡ!\n\n"
+        f"🇪🇹 <b>YT Store — Ethiopian P2P Marketplace</b> {red_badge_html}\n"
         "የኢትዮጵያ P2P ክሪፕቶ እና ዲጂታል እቃዎች ማርኬት\n\n"
         "Choose an option below | ከታች ካሉት አማራጮች ይምረጡ፦"
     )
@@ -580,7 +594,11 @@ async def show_edit_banks_list(callback: types.CallbackQuery):
             InlineKeyboardButton(text=f"🗑 Delete", callback_data=f"delbank_{b_key}")
         ])
         
-    text += f"\n<b>Crypto Addresses:</b>\n• Bybit: <code>{crypto.get('bybit_uid')}</code>\n• BEP20: <code>{crypto.get('bep20_address')}</code>\n• Polygon: <code>{crypto.get('polygon_address')}</code>\n"
+    bybit_em = render_emoji(crypto.get("bybit_emoji", "5269673041079574131"))
+    poly_em = render_emoji(crypto.get("polygon_emoji", "5287429921939924412"))
+    bin_em = render_emoji(crypto.get("binance_emoji", "5345775235884917632"))
+
+    text += f"\n<b>Crypto Addresses:</b>\n• {bybit_em} Bybit: <code>{crypto.get('bybit_uid')}</code>\n• {bin_em} BEP20: <code>{crypto.get('bep20_address')}</code>\n• {poly_em} Polygon: <code>{crypto.get('polygon_address')}</code>\n"
     buttons.append([
         InlineKeyboardButton(text="✏️ Edit Bybit UID", callback_data="ecrypto_bybit_uid"),
         InlineKeyboardButton(text="✏️ Edit BEP20", callback_data="ecrypto_bep20_address")
@@ -1132,8 +1150,10 @@ async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት USDT stock አልቋል (Out of stock)።", show_alert=True)
         return
 
+    buy_em = render_emoji(settings.get("product_emojis", {}).get("buy", "5287328268653960659"))
+
     text = (
-        "💰 <b>Buy USDT | USDT መግዛት</b>\n\n"
+        f"💰 <b>Buy USDT {buy_em} | USDT መግዛት</b>\n\n"
         f"• Available stock (የአሁን መጠን): <b>{stock} USDT</b>\n"
         f"• Rate (ተመን): 1 USDT = {buy_rate} ETB\n"
         f"• Min / Max (ዝቅተኛ / ከፍተኛ): 0.5 - {min(stock, 10000.0)} USDT\n\n"
@@ -1512,12 +1532,13 @@ async def process_sell_proof_photo(message: types.Message, state: FSMContext):
 async def start_telegram_premium(callback: types.CallbackQuery, state: FSMContext):
     settings = await get_settings()
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
+    tg_em = render_emoji(settings.get("product_emojis", {}).get("telegram", "5345970124320941088"))
     
     p_3m = prices.get("prem_3m", 2600.0)
     p_6m = prices.get("prem_6m", 3700.0)
     p_12m = prices.get("prem_12m", 6000.0)
 
-    text = "💎 <b>Telegram Premium</b>\n\nመግዛት የሚፈልጉትን የፕሪሚየም ጊዜ ይምረጡ፦"
+    text = f"💎 <b>Telegram Premium {tg_em}</b>\n\nመግዛት የሚፈልጉትን የፕሪሚየም ጊዜ ይምረጡ፦"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"✈️ 3 Months — {p_3m:,.0f} ETB", callback_data="prem_3_months")],
         [InlineKeyboardButton(text=f"✈️ 6 Months — {p_6m:,.0f} ETB", callback_data="prem_6_months")],
@@ -1791,13 +1812,14 @@ async def start_gemini_pro(callback: types.CallbackQuery, state: FSMContext):
     stock = settings.get("stocks", {}).get("gemini_pro", 0)
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
     gemini_price = prices.get("gemini_pro", 350.0)
+    gemini_em = render_emoji(settings.get("product_emojis", {}).get("gemini", "5951817721468424817"))
     
     if stock <= 0:
         await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት Gemini Pro stock አልቋል (Out of stock)።", show_alert=True)
         return
 
     text = (
-        "✨ <b>Gemini Pro 18m</b>\n\n"
+        f"✨ <b>Gemini Pro 18m {gemini_em}</b>\n\n"
         f"🏷 <b>Price:</b> {gemini_price:,.2f} ETB each\n"
         f"🔥 <b>In stock:</b> <b>{stock} pcs</b>\n\n"
         "📄 <b>DESCRIPTION:</b>\n"
