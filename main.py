@@ -4,11 +4,11 @@ import aiohttp
 from datetime import datetime
 from aiohttp import web
 
-from aiogram import Bot, Dispatcher, F, types
+from aiogram import Bot, Dispatcher, F, types, BaseMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject
 
 # Render Environment Variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -64,6 +64,32 @@ async def fb_delete(path: str):
         await session.delete(url)
 
 # ==========================================
+# 🚫 BLOCK CHECK MIDDLEWARE
+# ==========================================
+async def is_blocked(user_id: int) -> bool:
+    b = await fb_get(f"blocked_users/{user_id}")
+    return bool(b)
+
+class BlockCheckMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: TelegramObject, data: dict):
+        user = getattr(event, "from_user", None)
+        if user:
+            if await is_blocked(user.id):
+                if isinstance(event, types.Message):
+                    await event.answer(
+                        "❌ <b>በእርስዎ መለያ ላይ እገዳ ተጥሏል!</b>\nቦቱን መጠቀም አይችሉም።",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⁉️ Support / ድጋፍ", callback_data="support")]]),
+                        parse_mode="HTML"
+                    )
+                elif isinstance(event, types.CallbackQuery):
+                    await event.answer("❌ በእርስዎ መለያ ላይ እገዳ ተጥሏል!", show_alert=True)
+                return
+        return await handler(event, data)
+
+dp.message.middleware(BlockCheckMiddleware())
+dp.callback_query.middleware(BlockCheckMiddleware())
+
+# ==========================================
 # ⚙️ STANDARD SETTINGS & EMOJIS
 # ==========================================
 DEFAULT_SETTINGS = {
@@ -116,8 +142,7 @@ async def get_settings():
             owner_val = str(b_info.get("owner", ""))
             emoji_val = str(b_info.get("emoji", "🏛"))
             
-            if emoji_val.isdigit():
-                emoji_val = "🏛"
+            if emoji_val.isdigit(): emoji_val = "🏛"
 
             if ("Nesredin" in name_val or "Redi" in name_val or "Aymen" in name_val) and b_key in DEFAULT_SETTINGS["banks"]:
                 clean_banks[b_key] = {
@@ -167,6 +192,21 @@ def get_all_users_sync_list(users_dict):
     if not users_dict:
         return []
     return list(users_dict.keys())
+
+# Helper for Stock Broadcasts
+async def broadcast_stock_update(text_msg: str, btn_text: str, btn_callback: str):
+    users_dict = await fb_get("users") or {}
+    user_ids = get_all_users_sync_list(users_dict)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=btn_text, callback_data=btn_callback)],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]
+    ])
+    for u_id in user_ids:
+        try:
+            await bot.send_message(int(u_id), text_msg, reply_markup=kb, parse_mode="HTML")
+            await asyncio.sleep(0.03)
+        except Exception:
+            pass
 
 # Dynamic Banks Keyboard Generator
 def build_banks_keyboard(banks_dict: dict, callback_prefix: str) -> InlineKeyboardMarkup:
@@ -252,7 +292,7 @@ class EditSettingsState(StatesGroup):
     waiting_for_new_bank_num = State()
     waiting_for_prod_price_val = State()
 
-# Clean Main Menu Keyboard (Without Balance Button)
+# Clean Main Menu Keyboard
 async def get_main_menu_keyboard():
     settings = await get_settings()
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
@@ -294,6 +334,61 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ==========================================
+# 🚀 QUICK COMMANDS (`/rates`, `/stocks`, `/unblock`)
+# ==========================================
+@dp.message(Command("rates"))
+async def cmd_rates(message: types.Message):
+    settings = await get_settings()
+    rates = settings.get("rates", {})
+    text = (
+        f"💵 <b>Current Exchange Rates | የአሁኑ ተመኖች፦</b>\n\n"
+        f"• Buy Rate (የመግዣ ተመን): <b>1 USDT = {rates.get('buy', 197.0)} ETB</b>\n"
+        f"• Sell Rate (የመሸጫ ተመን): <b>1 USDT = {rates.get('sell', 182.0)} ETB</b>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 Buy USDT", callback_data="buy_usdt"), InlineKeyboardButton(text="🔴 Sell USDT", callback_data="sell_usdt")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]
+    ])
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+@dp.message(Command("stocks"))
+async def cmd_stocks(message: types.Message):
+    settings = await get_settings()
+    stocks = settings.get("stocks", {})
+    text = (
+        f"📦 <b>Current Stocks & Reserves | የእቃዎች መጠን፦</b>\n\n"
+        f"• USDT Stock: <b>{stocks.get('usdt', 0.0)} USDT</b>\n"
+        f"• ETB Reserve: <b>{stocks.get('etb_reserve', 0.0):,.2f} ETB</b>\n"
+        f"• Monthly Unlimited Data: <b>{stocks.get('unlimited_data', 0)} pcs</b>\n"
+        f"• Gemini Pro 18m: <b>{stocks.get('gemini_pro', 0)} pcs</b>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌐 Unlimited Data", callback_data="unlimited_data"), InlineKeyboardButton(text="✨ Gemini Pro", callback_data="gemini_pro")],
+        [InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]
+    ])
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+@dp.message(Command("unblock"))
+async def cmd_unblock(message: types.Message):
+    role = await get_admin_role(message.from_user.id)
+    if role not in ["SUPER_ADMIN", "FULL"]:
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply("አጠቃቀም: `/unblock <user_id>` (ምሳሌ: `/unblock 123456789`)", parse_mode="Markdown")
+        return
+    try:
+        target_id = int(args[1])
+        await fb_delete(f"blocked_users/{target_id}")
+        await message.reply(f"✅ ተጠቃሚ ID <code>{target_id}</code> ከእገዳ ነፃ ሆኗል!", parse_mode="HTML")
+        try:
+            await bot.send_message(target_id, "🎉 እገዳዎ በአስተዳዳሪው ተነስቷል! አሁን ቦቱን እንደገና መጠቀም ይችላሉ።", parse_mode="HTML")
+        except Exception:
+            pass
+    except ValueError:
+        await message.reply("❌ ትክክለኛ የቁጥር ID ያስገቡ።")
+
+# ==========================================
 # 👑 ADMIN PANEL & ROLES MANAGEMENT
 # ==========================================
 @dp.message(Command("admin"))
@@ -316,7 +411,6 @@ async def cmd_admin_panel(message: types.Message):
     )
     
     buttons = []
-    
     if role in ["SUPER_ADMIN", "FULL"]:
         buttons.append([
             InlineKeyboardButton(text="💵 Edit Rates", callback_data="admin_edit_rates"),
@@ -341,6 +435,7 @@ async def cmd_admin_panel(message: types.Message):
         ])
         buttons.append([InlineKeyboardButton(text="👑 Transfer Super Admin Ownership", callback_data="admin_transfer_super_start")])
         
+    buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")])
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_back")
@@ -368,6 +463,7 @@ async def admin_back_handler(callback: types.CallbackQuery, state: FSMContext):
         buttons.append([InlineKeyboardButton(text="📜 Admin List", callback_data="admin_list"), InlineKeyboardButton(text="➕ Add Admin", callback_data="admin_add_admin")])
         buttons.append([InlineKeyboardButton(text="👑 Transfer Super Admin Ownership", callback_data="admin_transfer_super_start")])
         
+    buttons.append([InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")])
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
 
@@ -408,7 +504,9 @@ async def start_edit_single_price(callback: types.CallbackQuery, state: FSMConte
     }
     await state.update_data(target_price_key=target_key, target_label=labels.get(target_key, target_key))
     await state.set_state(EditSettingsState.waiting_for_prod_price_val)
-    await callback.message.edit_text(f"🏷 ለ <b>{labels.get(target_key, target_key)}</b> አዲሱን ዋጋ በኢትዮጵያ ብር (ETB) ያስገቡ (ምሳሌ: 2800)፦", parse_mode="HTML")
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_edit_product_prices")]])
+    await callback.message.edit_text(f"🏷 ለ <b>{labels.get(target_key, target_key)}</b> አዲሱን ዋጋ በኢትዮጵያ ብር (ETB) ያስገቡ (ምሳሌ: 2800)፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_prod_price_val)
@@ -426,10 +524,12 @@ async def process_edit_single_price(message: types.Message, state: FSMContext):
         settings["product_prices"][p_key] = new_price
         await fb_put("settings", settings)
         
-        await message.answer(f"✅ የ <b>{p_label}</b> ዋጋ ወደ <b>{new_price:,.2f} ETB</b> በተሳካ ሁኔታ ተቀይሯል!", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ የ <b>{p_label}</b> ዋጋ ወደ <b>{new_price:,.2f} ETB</b> በተሳካ ሁኔታ ተቀይሯል!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
     except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብር መጠን ያስገቡ፦")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብር መጠን ያስገቡ፦", reply_markup=kb)
 
 @dp.callback_query(F.data == "admin_bot_stats")
 async def show_bot_stats(callback: types.CallbackQuery):
@@ -453,7 +553,7 @@ async def show_bot_stats(callback: types.CallbackQuery):
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
 
-# Stock Management
+# Stock Management with Auto-Broadcast
 @dp.callback_query(F.data == "admin_edit_stocks")
 async def show_stock_menu(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id): return
@@ -479,18 +579,19 @@ async def show_stock_menu(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("stk_"))
 async def start_stock_update(callback: types.CallbackQuery, state: FSMContext):
     target = callback.data
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_edit_stocks")]])
     if target == "stk_usdt":
         await state.set_state(EditSettingsState.waiting_for_stock_usdt)
-        await callback.message.edit_text("አዲሱን የ <b>USDT Stock</b> መጠን ያስገቡ (ምሳሌ: 500)፦", parse_mode="HTML")
+        await callback.message.edit_text("አዲሱን የ <b>USDT Stock</b> መጠን ያስገቡ (ምሳሌ: 500)፦", reply_markup=kb, parse_mode="HTML")
     elif target == "stk_etb":
         await state.set_state(EditSettingsState.waiting_for_stock_etb)
-        await callback.message.edit_text("አዲሱን የ <b>ETB Payout Reserve</b> ብር መጠን ያስገቡ (ምሳሌ: 25000)፦", parse_mode="HTML")
+        await callback.message.edit_text("አዲሱን የ <b>ETB Payout Reserve</b> ብር መጠን ያስገቡ (ምሳሌ: 25000)፦", reply_markup=kb, parse_mode="HTML")
     elif target == "stk_data":
         await state.set_state(EditSettingsState.waiting_for_stock_data)
-        await callback.message.edit_text("አዲሱን የ <b>Unlimited Data</b> ብዛት ያስገቡ (ምሳሌ: 5)፦", parse_mode="HTML")
+        await callback.message.edit_text("አዲሱን የ <b>Unlimited Data</b> ብዛት ያስገቡ (ምሳሌ: 5)፦", reply_markup=kb, parse_mode="HTML")
     elif target == "stk_gemini":
         await state.set_state(EditSettingsState.waiting_for_stock_gemini)
-        await callback.message.edit_text("አዲሱን የ <b>Gemini Pro</b> ብዛት ያስገቡ (ምሳሌ: 50)፦", parse_mode="HTML")
+        await callback.message.edit_text("አዲሱን የ <b>Gemini Pro</b> ብዛት ያስገቡ (ምሳሌ: 50)፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_stock_usdt)
@@ -500,9 +601,19 @@ async def process_stock_usdt(message: types.Message, state: FSMContext):
         settings = await get_settings()
         settings["stocks"]["usdt"] = val
         await fb_put("settings", settings)
-        await message.answer(f"✅ USDT Stock ወደ <b>{val} USDT</b> ተቀይሯል!", parse_mode="HTML")
+        
+        # Broadcast stock update
+        await broadcast_stock_update(
+            f"🟢 <b>USDT Stock Update!</b>\n\nአሁን አዲስ የ <b>{val} USDT</b> ስቶክ ተጭኗል! አሁኑኑ ይግዙ።",
+            "🟢 Buy USDT Now", "buy_usdt"
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ USDT Stock ወደ <b>{val} USDT</b> ተቀይሮ ለተጠቃሚዎች ተነግሯል!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
-    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+    except ValueError: 
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦", reply_markup=kb)
 
 @dp.message(EditSettingsState.waiting_for_stock_etb)
 async def process_stock_etb(message: types.Message, state: FSMContext):
@@ -511,9 +622,12 @@ async def process_stock_etb(message: types.Message, state: FSMContext):
         settings = await get_settings()
         settings["stocks"]["etb_reserve"] = val
         await fb_put("settings", settings)
-        await message.answer(f"✅ ETB Payout Reserve ወደ <b>{val:,.2f} ETB</b> ተቀይሯል!", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ ETB Payout Reserve ወደ <b>{val:,.2f} ETB</b> ተቀይሯል!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
-    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+    except ValueError: 
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦", reply_markup=kb)
 
 @dp.message(EditSettingsState.waiting_for_stock_data)
 async def process_stock_data(message: types.Message, state: FSMContext):
@@ -522,9 +636,18 @@ async def process_stock_data(message: types.Message, state: FSMContext):
         settings = await get_settings()
         settings["stocks"]["unlimited_data"] = val
         await fb_put("settings", settings)
-        await message.answer(f"✅ Unlimited Data Stock ወደ <b>{val} pcs</b> ተቀይሯል!", parse_mode="HTML")
+        
+        await broadcast_stock_update(
+            f"🌐 <b>Monthly Unlimited Data Stock Update!</b>\n\nአዲስ <b>{val} pcs</b> ዳታ ስቶክ ተጭኗል!",
+            "🌐 Buy Unlimited Data", "unlimited_data"
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ Unlimited Data Stock ወደ <b>{val} pcs</b> ተቀይሮ ማስታወቂያ ተልኳል!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
-    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦")
+    except ValueError: 
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦", reply_markup=kb)
 
 @dp.message(EditSettingsState.waiting_for_stock_gemini)
 async def process_stock_gemini(message: types.Message, state: FSMContext):
@@ -533,11 +656,20 @@ async def process_stock_gemini(message: types.Message, state: FSMContext):
         settings = await get_settings()
         settings["stocks"]["gemini_pro"] = val
         await fb_put("settings", settings)
-        await message.answer(f"✅ Gemini Pro Stock ወደ <b>{val} pcs</b> ተቀይሯል!", parse_mode="HTML")
+        
+        await broadcast_stock_update(
+            f"✨ <b>Gemini Pro 18m Stock Update!</b>\n\nአዲስ <b>{val} pcs</b> ጂሚኒ ፕሮ ስቶክ ተጭኗል!",
+            "✨ Buy Gemini Pro", "gemini_pro"
+        )
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ Gemini Pro Stock ወደ <b>{val} pcs</b> ተቀይሮ ማስታወቂያ ተልኳል!", reply_markup=kb, parse_mode="HTML")
         await state.clear()
-    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦")
+    except ValueError: 
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦", reply_markup=kb)
 
-# Edit & Delete Banks & Crypto Addresses (With Sub-Menu Inline Keyboards)
+# Edit & Delete Banks & Crypto Addresses
 @dp.callback_query(F.data == "admin_edit_banks")
 async def show_edit_banks_list(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id): return
@@ -599,10 +731,10 @@ async def show_bank_edit_submenu(callback: types.CallbackQuery):
         "ቀይር የሚፈልጉትን መረጃ በይነ-ገጽ (Inline Keyboard) ይምረጡ፦"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit Name (ስም ቀይር)", callback_data=f"ebfield_{b_key}_name")],
-        [InlineKeyboardButton(text="🎨 Edit Logo/Emoji (ኢሞጂ ቀይር)", callback_data=f"ebfield_{b_key}_emoji")],
-        [InlineKeyboardButton(text="🔢 Edit Account Number (ቁጥር ቀይር)", callback_data=f"ebfield_{b_key}_number")],
-        [InlineKeyboardButton(text="👤 Edit Owner Name (ባለቤት ቀይር)", callback_data=f"ebfield_{b_key}_owner")],
+        [InlineKeyboardButton(text="✏️ Edit Name", callback_data=f"ebfield_{b_key}_name")],
+        [InlineKeyboardButton(text="🎨 Edit Emoji", callback_data=f"ebfield_{b_key}_emoji")],
+        [InlineKeyboardButton(text="🔢 Edit Account Number", callback_data=f"ebfield_{b_key}_number")],
+        [InlineKeyboardButton(text="👤 Edit Owner Name", callback_data=f"ebfield_{b_key}_owner")],
         [InlineKeyboardButton(text="🔙 Back to Banks List", callback_data="admin_edit_banks")]
     ])
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -623,7 +755,8 @@ async def start_edit_bank_single_field(callback: types.CallbackQuery, state: FSM
     
     await state.update_data(edit_b_key=b_key, edit_b_field=field)
     await state.set_state(EditSettingsState.waiting_for_edit_bank_single_field)
-    await callback.message.edit_text(field_prompts.get(field, "አዲሱን መረጃ ያስገቡ፦"), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data=f"ebank_menu_{b_key}")]])
+    await callback.message.edit_text(field_prompts.get(field, "አዲሱን መረጃ ያስገቡ፦"), reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_edit_bank_single_field)
@@ -645,7 +778,8 @@ async def process_save_bank_single_field(message: types.Message, state: FSMConte
     await fb_put("settings", settings)
     
     b_name = settings["banks"][b_key].get("name", b_key.upper())
-    await message.answer(f"✅ የ <b>{b_name}</b> መረጃ ({field.upper()}) በተሳካ ሁኔታ ተቀይሯል!", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏛 Edit Banks", callback_data="admin_edit_banks"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer(f"✅ የ <b>{b_name}</b> መረጃ ({field.upper()}) በተሳካ ሁኔታ ተቀይሯል!", reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("delbank_"))
@@ -675,7 +809,8 @@ async def start_edit_crypto_address(callback: types.CallbackQuery, state: FSMCon
     c_key = callback.data.replace("ecrypto_", "")
     await state.update_data(target_crypto_key=c_key)
     await state.set_state(EditSettingsState.waiting_for_edit_crypto_val)
-    await callback.message.edit_text(f"🌐 አዲሱን <b>{c_key.upper()}</b> አድራሻ ያስገቡ፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_edit_banks")]])
+    await callback.message.edit_text(f"🌐 አዲሱን <b>{c_key.upper()}</b> አድራሻ ያስገቡ፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_edit_crypto_val)
@@ -688,7 +823,8 @@ async def process_edit_crypto_val(message: types.Message, state: FSMContext):
     settings["crypto"][c_key] = new_val
     await fb_put("settings", settings)
     
-    await message.answer(f"✅ <b>{c_key.upper()}</b> አድራሻ በተሳካ ሁኔታ ተቀይሯል!\n\n<code>{new_val}</code>", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏛 Edit Banks", callback_data="admin_edit_banks"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer(f"✅ <b>{c_key.upper()}</b> አድራሻ በተሳካ ሁኔታ ተቀይሯል!\n\n<code>{new_val}</code>", reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # Add New Bank
@@ -696,7 +832,8 @@ async def process_edit_crypto_val(message: types.Message, state: FSMContext):
 async def start_add_new_bank(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
     await state.set_state(EditSettingsState.waiting_for_new_bank_key)
-    await callback.message.edit_text("➕ የአዲሱን ባንክ መለያ ቃል ያለ ቦታ (Key) ያስገቡ (ምሳሌ: <code>hibret</code>)፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_edit_banks")]])
+    await callback.message.edit_text("➕ የአዲሱን ባንክ መለያ ቃል ያለ ቦታ (Key) ያስገቡ (ምሳሌ: <code>hibret</code>)፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_new_bank_key)
@@ -704,14 +841,16 @@ async def process_new_bank_key(message: types.Message, state: FSMContext):
     key = message.text.strip().lower().replace(" ", "_")
     await state.update_data(new_b_key=key)
     await state.set_state(EditSettingsState.waiting_for_new_bank_name)
-    await message.answer("የባንኩን ይፋዊ ስም ያስገቡ (ምሳሌ: <b>Hibret Bank</b>)፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer("የባንኩን ይፋዊ ስም ያስገቡ (ምሳሌ: <b>Hibret Bank</b>)፦", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(EditSettingsState.waiting_for_new_bank_name)
 async def process_new_bank_name(message: types.Message, state: FSMContext):
     name = message.text.strip()
     await state.update_data(new_b_name=name)
     await state.set_state(EditSettingsState.waiting_for_new_bank_emoji)
-    await message.answer("የባንኩን ኢሞጂ ብቻ ያስገቡ (ምሳሌ: 🏦)፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer("የባንኩን ኢሞጂ ብቻ ያስገቡ (ምሳሌ: 🏦)፦", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(EditSettingsState.waiting_for_new_bank_emoji)
 async def process_new_bank_emoji(message: types.Message, state: FSMContext):
@@ -719,14 +858,16 @@ async def process_new_bank_emoji(message: types.Message, state: FSMContext):
     if emoji.isdigit(): emoji = "🏛"
     await state.update_data(new_b_emoji=emoji)
     await state.set_state(EditSettingsState.waiting_for_new_bank_owner)
-    await message.answer("የባለቤቱን ሙሉ ስም ያስገቡ፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer("የባለቤቱን ሙሉ ስም ያስገቡ፦", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(EditSettingsState.waiting_for_new_bank_owner)
 async def process_new_bank_owner(message: types.Message, state: FSMContext):
     owner = message.text.strip()
     await state.update_data(new_b_owner=owner)
     await state.set_state(EditSettingsState.waiting_for_new_bank_num)
-    await message.answer("የባንክ አካውንት ቁጥሩን ያስገቡ፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer("የባንክ አካውንት ቁጥሩን ያስገቡ፦", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(EditSettingsState.waiting_for_new_bank_num)
 async def process_new_bank_num(message: types.Message, state: FSMContext):
@@ -742,7 +883,8 @@ async def process_new_bank_num(message: types.Message, state: FSMContext):
     settings["banks"][b_key] = {"name": b_name, "emoji": b_emoji, "owner": b_owner, "number": num}
     await fb_put("settings", settings)
     
-    await message.answer(f"🎉 {b_emoji} <b>{b_name}</b> በተሳካ ሁኔታ አዲስ ባንክ ሆኖ ተጨምሯል!\n\nከእንግዲህ ተጠቃሚዎች ክፍያ ሲፈጽሙ እንደ አማራጭ ያገኙታል።", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer(f"🎉 {b_emoji} <b>{b_name}</b> በተሳካ ሁኔታ አዲስ ባንክ ሆኖ ተጨምሯል!\n\nከእንግዲህ ተጠቃሚዎች ክፍያ ሲፈጽሙ እንደ አማራጭ ያገኙታል።", reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # Admin List & Other Roles
@@ -781,7 +923,8 @@ async def admin_add_admin_start(callback: types.CallbackQuery, state: FSMContext
         await callback.answer("❌ አዲስ አድሚን መጨመር የሚችለው ዋናው Super Admin ብቻ ነው!", show_alert=True)
         return
     await state.set_state(EditSettingsState.waiting_for_new_admin_id)
-    await callback.message.edit_text("➕ አዲስ አድሚን የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_list")]])
+    await callback.message.edit_text("➕ አዲስ አድሚን የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_new_admin_id)
@@ -799,7 +942,8 @@ async def process_add_new_admin_id(message: types.Message, state: FSMContext):
         ])
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ብቻ ያስገቡ፦")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ብቻ ያስገቡ፦", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("set_role_"))
 async def process_save_admin_role(callback: types.CallbackQuery, state: FSMContext):
@@ -809,7 +953,8 @@ async def process_save_admin_role(callback: types.CallbackQuery, state: FSMConte
     
     if new_admin_id:
         await fb_put(f"admins/{new_admin_id}", {"role": selected_role, "added_at": datetime.now().strftime("%Y-%m-%d")})
-        await callback.message.edit_text(f"✅ ተጠቃሚ ID <code>{new_admin_id}</code> በ Role <b>{selected_role}</b> በአድሚንነት ተጨምሯል!", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await callback.message.edit_text(f"✅ ተጠቃሚ ID <code>{new_admin_id}</code> በ Role <b>{selected_role}</b> በአድሚንነት ተጨምሯል!", reply_markup=kb, parse_mode="HTML")
     await state.clear()
     await callback.answer()
 
@@ -848,7 +993,8 @@ async def start_transfer_super(callback: types.CallbackQuery, state: FSMContext)
     
     text = "👑 <b>Transfer Super Admin Ownership</b>\n\nአዲስ Super Admin የሚሆነውን ሰው <b>Telegram User ID</b> ያስገቡ፦"
     await state.set_state(EditSettingsState.waiting_for_transfer_super_id)
-    await callback.message.edit_text(text, parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_back")]])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_transfer_super_id)
@@ -868,7 +1014,8 @@ async def ask_confirm_super_transfer(message: types.Message, state: FSMContext):
         ])
         await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
     except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ያስገቡ፦")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ID ያስገቡ፦", reply_markup=kb)
 
 @dp.callback_query(F.data == "confirm_transfer_super")
 async def confirm_super_transfer_action(callback: types.CallbackQuery, state: FSMContext):
@@ -877,7 +1024,8 @@ async def confirm_super_transfer_action(callback: types.CallbackQuery, state: FS
     
     if new_sa_id:
         await fb_put("super_admin_id", new_sa_id)
-        await callback.message.edit_text(f"🎉 <b>የቦቱ ባለቤትነት በተሳካ ሁኔታ ወደ <code>{new_sa_id}</code> ተላልፏል!</b>", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await callback.message.edit_text(f"🎉 <b>የቦቱ ባለቤትነት በተሳካ ሁኔታ ወደ <code>{new_sa_id}</code> ተላልፏል!</b>", reply_markup=kb, parse_mode="HTML")
     await state.clear()
     await callback.answer()
 
@@ -894,7 +1042,8 @@ async def admin_edit_rates_start(callback: types.CallbackQuery, state: FSMContex
         "አዲሱን የ <b>BUY Rate</b> (የመግዣ ተመን) ያስገቡ (ምሳሌ: 198.5)፦"
     )
     await state.set_state(EditSettingsState.waiting_for_buy_rate)
-    await callback.message.edit_text(text, parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_back")]])
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(EditSettingsState.waiting_for_buy_rate)
@@ -903,9 +1052,11 @@ async def process_new_buy_rate(message: types.Message, state: FSMContext):
         new_buy = float(message.text.strip())
         await state.update_data(new_buy=new_buy)
         await state.set_state(EditSettingsState.waiting_for_sell_rate)
-        await message.answer("አዲሱን የ <b>SELL Rate</b> (የመሸጫ ተመን) ያስገቡ (ምሳሌ: 184.0)፦", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("አዲሱን የ <b>SELL Rate</b> (የመሸጫ ተመን) ያስገቡ (ምሳሌ: 184.0)፦", reply_markup=kb, parse_mode="HTML")
     except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦", reply_markup=kb)
 
 @dp.message(EditSettingsState.waiting_for_sell_rate)
 async def process_new_sell_rate(message: types.Message, state: FSMContext):
@@ -919,16 +1070,19 @@ async def process_new_sell_rate(message: types.Message, state: FSMContext):
         settings["rates"]["sell"] = new_sell
         await fb_put("settings", settings)
         
-        await message.answer(f"✅ <b>ተመኖች በተሳካ ሁኔታ ተቀይረዋል!</b>\n\nBuy: {new_buy} ETB\nSell: {new_sell} ETB", parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer(f"✅ <b>ተመኖች በተሳካ ሁኔታ ተቀይረዋል!</b>\n\nBuy: {new_buy} ETB\nSell: {new_sell} ETB", reply_markup=kb, parse_mode="HTML")
         await state.clear()
     except ValueError:
-        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+        await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦", reply_markup=kb)
 
 @dp.callback_query(F.data == "admin_start_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
     await state.set_state(BroadcastState.waiting_for_broadcast_msg)
-    await callback.message.edit_text("📢 ለሁሉም ተጠቃሚዎች የሚላከውን ማስታወቂያ/ፅሁፍ ይጻፉ፦", parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back", callback_data="admin_back")]])
+    await callback.message.edit_text("📢 ለሁሉም ተጠቃሚዎች የሚላከውን ማስታወቂያ/ፅሁፍ ይጻፉ፦", reply_markup=kb, parse_mode="HTML")
     await callback.answer()
 
 @dp.message(BroadcastState.waiting_for_broadcast_msg)
@@ -937,7 +1091,8 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
     user_ids = get_all_users_sync_list(users_dict)
     
     success = 0
-    await message.answer(f"⏳ ለ {len(user_ids)} ተጠቃሚዎች በመላክ ላይ...")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_back"), InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
+    await message.answer(f"⏳ ለ {len(user_ids)} ተጠቃሚዎች በመላክ ላይ...", reply_markup=kb)
     for u_id in user_ids:
         try:
             await message.copy_to(chat_id=int(u_id))
@@ -945,7 +1100,7 @@ async def process_broadcast_message(message: types.Message, state: FSMContext):
             await asyncio.sleep(0.04)
         except Exception:
             pass
-    await message.answer(f"✅ ብሮድካስት ተጠናቋል! ለ {success} ተጠቃሚዎች ደርሷል።")
+    await message.answer(f"✅ ብሮድካስት ተጠናቋል! ለ {success} ተጠቃሚዎች ደርሷል።", reply_markup=kb)
     await state.clear()
 
 # ==========================================
@@ -1037,7 +1192,7 @@ async def show_completed_history(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "support")
 async def show_support(callback: types.CallbackQuery):
     support_text = (
-        "🥊 <b>Customer Support | የደንበኞች አገልግሎት</b>\n\n"
+        "⁉️ <b>Customer Support | የደንበኞች አገልግሎት</b>\n\n"
         "ማንኛውም ጥያቄ፣ አስተያየት ወይም የክፍያ ችግር ካጋጠመዎት ከታች ያለውን <b>Message Admin Inside Bot</b> ቁልፍ በመጫን ቀጥታ ለአድሚን ይጻፉ፦\n\n"
         "🕒 <b>Working hours:</b> 08:00–22:00 EAT"
     )
@@ -1067,7 +1222,12 @@ async def process_support_message(message: types.Message, state: FSMContext):
 
     user = message.from_user
     admin_caption = f"📩 <b>New Support Message!</b>\n\n👤 User: {user.full_name} (@{user.username if user.username else 'None'}, ID: <code>{user.id}</code>)"
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✍️ Reply to User (መልስ ስጥ)", callback_data=f"reply_user_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✍️ Reply", callback_data=f"reply_user_{user.id}"),
+            InlineKeyboardButton(text="🚫 Block", callback_data=f"block_{user.id}")
+        ]
+    ])
 
     if ADMIN_GROUP_ID != 0:
         try:
@@ -1077,8 +1237,9 @@ async def process_support_message(message: types.Message, state: FSMContext):
                 await bot.send_message(ADMIN_GROUP_ID, text=f"{admin_caption}\n\n💬 <b>Msg:</b> {message.text}", reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text("✅ <b>መልእክትዎ ለአድሚን ተልኳል!</b>\n\nአድሚኖች መልእክትዎን አይተው በቦቱ በኩል ይመልሱልዎታል።", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text("✅ <b>መልእክትዎ ለአድሚን ተልኳል!</b>\n\nአድሚኖች መልእክትዎን አይተው በቦቱ በኩል ይመልሱልዎታል።", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 @dp.callback_query(F.data.startswith("reply_user_"))
@@ -1108,7 +1269,7 @@ async def send_admin_reply_to_user(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 🟢 BUY USDT WORKFLOW (DYNAMIC STOCKS & STRICT VALIDATION)
+# 🟢 BUY USDT WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "buy_usdt")
 async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
@@ -1148,7 +1309,8 @@ async def process_buy_amount(message: types.Message, state: FSMContext):
         max_limit = min(stock, 10000.0)
         if amount < 0.5 or amount > max_limit:
             err_text = f"⚠️ እባክዎ ከ 0.5 እስከ {max_limit} USDT መካከል ያስገቡ፦"
-            if last_msg_id: await bot.edit_message_text(err_text, chat_id=message.chat.id, message_id=last_msg_id)
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+            if last_msg_id: await bot.edit_message_text(err_text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb)
             return
         
         total_price = amount * buy_rate
@@ -1170,7 +1332,8 @@ async def process_buy_amount(message: types.Message, state: FSMContext):
         if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
             
     except ValueError:
-        if last_msg_id: await bot.edit_message_text("❌ እባክዎ ትክክለኛ ቁጥር ብቻ ያስገቡ (ለምሳሌ: 10)፦", chat_id=message.chat.id, message_id=last_msg_id)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+        if last_msg_id: await bot.edit_message_text("❌ እባክዎ ትክክለኛ ቁጥር ብቻ ያስገቡ (ለምሳሌ: 10)፦", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb)
 
 @dp.callback_query(BuyUSDTState.waiting_for_network, F.data.startswith("net_"))
 async def select_network(callback: types.CallbackQuery, state: FSMContext):
@@ -1214,7 +1377,8 @@ async def process_address(message: types.Message, state: FSMContext):
             err_msg = "⚠️ አድራሻው በ '0x' መጀመር እና 42 ፊደላት/ቁጥሮች መሆን አለበት፦"
 
     if not is_valid:
-        if last_msg_id: await bot.edit_message_text(err_msg, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+        if last_msg_id: await bot.edit_message_text(err_msg, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
         return
 
     await state.update_data(address=address)
@@ -1298,18 +1462,25 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
         f"📍 Address/UID: <code>{address}</code>\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"), InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")
+        ],
+        [InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{user.id}")]
+    ])
     
     if ADMIN_GROUP_ID != 0:
         try: await bot.send_photo(ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_text, reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
             
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! ትዕዛዝዎ በአስተዳዳሪዎች እየተጣራ ነው። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! ትዕዛዝዎ በአስተዳዳሪዎች እየተጣራ ነው። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # ==========================================
-# 🔴 SELL USDT WORKFLOW (ETB RESERVE & DYNAMIC BANKS)
+# 🔴 SELL USDT WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "sell_usdt")
 async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
@@ -1388,7 +1559,8 @@ async def process_account_number(message: types.Message, state: FSMContext):
             err_msg = f"⚠️ እባክዎ ትክክለኛ የ <b>{method}</b> የሂሳብ ቁጥር ያስገቡ፦"
 
     if not is_valid:
-        if last_msg_id: await bot.edit_message_text(err_msg, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+        if last_msg_id: await bot.edit_message_text(err_msg, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
         return
 
     await state.update_data(account_num=account_num)
@@ -1398,7 +1570,7 @@ async def process_account_number(message: types.Message, state: FSMContext):
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
     await state.set_state(SellUSDTState.waiting_for_account_name)
-    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
 
 @dp.message(SellUSDTState.waiting_for_account_name)
 async def process_account_name(message: types.Message, state: FSMContext):
@@ -1409,7 +1581,8 @@ async def process_account_name(message: types.Message, state: FSMContext):
     except Exception: pass
 
     if len(acc_name) < 3:
-        if last_msg_id: await bot.edit_message_text("⚠️ እባክዎ ትክክለኛ ሙሉ ስም ያስገቡ፦", chat_id=message.chat.id, message_id=last_msg_id)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+        if last_msg_id: await bot.edit_message_text("⚠️ እባክዎ ትክክለኛ ሙሉ ስም ያስገቡ፦", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb)
         return
 
     await state.update_data(acc_name=acc_name)
@@ -1429,7 +1602,7 @@ async def process_account_name(message: types.Message, state: FSMContext):
         [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
     ])
     await state.set_state(SellUSDTState.waiting_for_deposit_network)
-    if last_msg_id: await bot.edit_message_text(text, reply_markup=keyboard, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
 
 @dp.callback_query(SellUSDTState.waiting_for_deposit_network, F.data.startswith("deposit_"))
 async def select_deposit_network(callback: types.CallbackQuery, state: FSMContext):
@@ -1484,18 +1657,25 @@ async def process_sell_proof_photo(message: types.Message, state: FSMContext):
         f"👤 Account Name: {acc_name}\n\n"
         "የ USDT ትራንስፈር ስክሪንሾት ከታች ተያይዟል፦"
     )
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve (ብር ላክኩ)", callback_data=f"app_{ord_key}_{user.id}"), InlineKeyboardButton(text="❌ Reject (ውድቅ አድርግ)", callback_data=f"rej_{ord_key}_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")
+        ],
+        [InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{user.id}")]
+    ])
     
     if ADMIN_GROUP_ID != 0:
         try: await bot.send_photo(ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_text, reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
             
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text(f"✅ <b>Transfer proof received successfully! (#{ord_key[:6]})</b>\n\nየUSDT ትራንስፈር ማረጋገጫዎ ደርሶናል! አድሚኑ ማረጋገጫውን አይቶ የኢትዮጵያ ብር በባንክ/ቴሌብር ይልክልዎታል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text(f"✅ <b>Transfer proof received successfully! (#{ord_key[:6]})</b>\n\nየUSDT ትራንስፈር ማረጋገጫዎ ደርሶናል! አድሚኑ ማረጋገጫውን አይቶ የኢትዮጵያ ብር በባንክ/ቴሌብር ይልክልዎታል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # ==========================================
-# 💎 TELEGRAM PREMIUM WORKFLOW (DYNAMIC PRICES)
+# 💎 TELEGRAM PREMIUM WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "telegram_premium")
 async def start_telegram_premium(callback: types.CallbackQuery, state: FSMContext):
@@ -1606,18 +1786,25 @@ async def process_premium_proof_photo(message: types.Message, state: FSMContext)
         f"🎯 Target Account: <b>{target_username}</b>\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"), InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")
+        ],
+        [InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{user.id}")]
+    ])
     
     if ADMIN_GROUP_ID != 0:
         try: await bot.send_photo(ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_text, reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
             
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text(f"✅ <b>የክፍያ ማረጋገጫዎ ደርሶናል! (#{ord_key[:6]})</b>\n\nፕሪሚየሙ ወደ <b>{target_username}</b> በቅርቡ ይጫናል።", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text(f"✅ <b>የክፍያ ማረጋገጫዎ ደርሶናል! (#{ord_key[:6]})</b>\n\nፕሪሚየሙ ወደ <b>{target_username}</b> በቅርቡ ይጫናል።", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # ==========================================
-# 🌐 MONTHLY UNLIMITED DATA WORKFLOW (DYNAMIC PRICE)
+# 🌐 MONTHLY UNLIMITED DATA WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "unlimited_data")
 async def start_unlimited_data(callback: types.CallbackQuery, state: FSMContext):
@@ -1672,10 +1859,11 @@ async def process_data_phone_number(message: types.Message, state: FSMContext):
     except Exception: pass
 
     if not (phone_num.startswith("09") or phone_num.startswith("07")) or len(phone_num) != 10 or not phone_num.isdigit():
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
         if last_msg_id:
             await bot.edit_message_text(
                 "⚠️ <b>የተሳሳተ የስልክ ቁጥር!</b>\n\nእባክዎ ዳታው የሚሞላበትን ትክክለኛ የስልክ ቁጥር በ '09' ወይም '07' ጀምረው ያስገቡ (10 አሃዝ)፦",
-                chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML"
+                chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML"
             )
         return
 
@@ -1763,18 +1951,25 @@ async def process_data_proof_photo(message: types.Message, state: FSMContext):
         f"💵 Price: {data_price:,.2f} ETB\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve (ዳታው ተሞላ)", callback_data=f"app_{ord_key}_{user.id}"), InlineKeyboardButton(text="❌ Reject (ውድቅ አድርግ)", callback_data=f"rej_{ord_key}_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")
+        ],
+        [InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{user.id}")]
+    ])
     
     if ADMIN_GROUP_ID != 0:
         try: await bot.send_photo(ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_text, reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
             
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! ያልተገደበው ዳታ በቅርቡ ወደ <b>{data_phone}</b> ይጫናል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! ያልተገደበው ዳታ በቅርቡ ወደ <b>{data_phone}</b> ይጫናል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # ==========================================
-# ✨ GEMINI PRO 18M WORKFLOW (DYNAMIC PRICE)
+# ✨ GEMINI PRO 18M WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "gemini_pro")
 async def start_gemini_pro(callback: types.CallbackQuery, state: FSMContext):
@@ -1886,19 +2081,43 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
         f"💵 Price: {gemini_price:,.2f} ETB\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
-    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Approve (ሊንክ ላክ)", callback_data=f"app_{ord_key}_{user.id}"), InlineKeyboardButton(text="❌ Reject (ውድቅ አድርግ)", callback_data=f"rej_{ord_key}_{user.id}")]])
+    admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Approve", callback_data=f"app_{ord_key}_{user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"rej_{ord_key}_{user.id}")
+        ],
+        [InlineKeyboardButton(text="🚫 Block User", callback_data=f"block_{user.id}")]
+    ])
     
     if ADMIN_GROUP_ID != 0:
         try: await bot.send_photo(ADMIN_GROUP_ID, photo=message.photo[-1].file_id, caption=admin_text, reply_markup=admin_keyboard, parse_mode="HTML")
         except Exception as e: print(f"Error: {e}")
             
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
     if last_msg_id:
-        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! አድሚኑ ክፍያውን አረጋግጦ የ Gemini Pro Activation link ይልክልዎታል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, parse_mode="HTML")
+        await bot.edit_message_text(f"✅ <b>Payment proof received successfully! (#{ord_key[:6]})</b>\n\nየክፍያ ማረጋገጫዎ ደርሶናል! አድሚኑ ክፍያውን አረጋግጦ የ Gemini Pro Activation link ይልክልዎታል። እባክዎ በትዕግስት ይጠብቁ... ⏳", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb, parse_mode="HTML")
     await state.clear()
 
 # ==========================================
-# 🛡 ADMIN APPROVE / REJECT CALLBACKS (AUTO STOCK DEDUCTION)
+# 🛡 ADMIN APPROVE / REJECT / BLOCK CALLBACKS
 # ==========================================
+@dp.callback_query(F.data.startswith("block_"))
+async def admin_block_user(callback: types.CallbackQuery):
+    role = await get_admin_role(callback.from_user.id)
+    if role not in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
+        await callback.answer("❌ ስልጣን የሎትም!", show_alert=True)
+        return
+    target_id = int(callback.data.split("_")[1])
+    await fb_put(f"blocked_users/{target_id}", True)
+    await callback.answer(f"✅ ተጠቃሚ ID {target_id} በተሳካ ሁኔታ ታግዷል!", show_alert=True)
+    try:
+        if callback.message.caption:
+            await callback.message.edit_caption(caption=callback.message.caption + f"\n\n<b>STATUS: 🚫 BLOCKED BY ADMIN</b>", parse_mode="HTML")
+        elif callback.message.text:
+            await callback.message.edit_text(callback.message.text + f"\n\n<b>STATUS: 🚫 BLOCKED BY ADMIN</b>", parse_mode="HTML")
+    except Exception:
+        pass
+
 @dp.callback_query(F.data.startswith("app_"))
 async def admin_approve_order(callback: types.CallbackQuery):
     role = await get_admin_role(callback.from_user.id)
@@ -1933,12 +2152,13 @@ async def admin_approve_order(callback: types.CallbackQuery):
     await fb_put(f"user_orders/{user_id}/{ord_key}/status", "APPROVED")
     
     try:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
         await bot.send_message(
             user_id,
             f"🎉 <b>ትዕዛዝዎ (#{ord_key[:6]}) በተሳካ ሁኔታ ጸድቋል (Approved)!</b>\n\n"
             "አድሚኑ ክፍያውን አረጋግጦ አገልግሎትዎን ልኮልዎታል። ቦቱን ስለተጠቀሙ እናመሰግናለን! 🙏\n"
             f"ችግር ካጋጠመዎት ሰፖርታችንን ያናግሩ፦ {SUPPORT_USERNAME}",
-            parse_mode="HTML"
+            reply_markup=kb, parse_mode="HTML"
         )
         if callback.message.caption:
             await callback.message.edit_caption(caption=callback.message.caption + f"\n\n<b>STATUS: ✅ APPROVED BY ADMIN</b>", parse_mode="HTML")
@@ -1972,10 +2192,11 @@ async def process_reject_reason(message: types.Message, state: FSMContext):
     await fb_put(f"user_orders/{user_id}/{ord_key}/status", "REJECTED")
     
     try:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 Main Menu", callback_data="main_menu")]])
         await bot.send_message(
             user_id,
             f"❌ <b>ትዕዛዝዎ (#{ord_key[:6]}) ውድቅ ተደርጓል (Rejected)!</b>\n\n<b>ምክንያት:</b> {reason}\n\nሰፖርት: {SUPPORT_USERNAME}",
-            parse_mode="HTML"
+            reply_markup=kb, parse_mode="HTML"
         )
         if admin_msg and admin_msg.caption:
             await admin_msg.edit_caption(caption=admin_msg.caption + f"\n\n<b>STATUS: ❌ REJECTED</b>\n<b>Reason:</b> {reason}", parse_mode="HTML")
@@ -1995,9 +2216,11 @@ async def cancel_order_handler(callback: types.CallbackQuery, state: FSMContext)
 @dp.callback_query(F.data == "help")
 async def show_help(callback: types.CallbackQuery):
     help_text = (
-        "❓ <b>Help | እርዳታ</b>\n\n"
+        "⁉️ <b>Help | እርዳታ</b>\n\n"
         "<b>User commands:</b>\n"
         "/start — Start the bot & see main menu\n"
+        "/rates — Check buy and sell rates\n"
+        "/stocks — Check available stocks\n"
         "/cancel — Cancel current action\n\n"
         "<b>Working hours:</b> 08:00–22:00 EAT\n"
         "<b>Support:</b> Use the Support button below 🎯"
