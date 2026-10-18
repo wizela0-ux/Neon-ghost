@@ -91,7 +91,7 @@ DEFAULT_SETTINGS = {
 
 async def get_settings():
     settings = await fb_get("settings")
-    if not settings:
+    if not settings or not isinstance(settings, dict):
         await fb_put("settings", DEFAULT_SETTINGS)
         return DEFAULT_SETTINGS
     
@@ -99,6 +99,29 @@ async def get_settings():
     if "stocks" not in settings: settings["stocks"] = DEFAULT_SETTINGS["stocks"]
     if "banks" not in settings: settings["banks"] = DEFAULT_SETTINGS["banks"]
     if "crypto" not in settings: settings["crypto"] = DEFAULT_SETTINGS["crypto"]
+    
+    # Sanitize banks to fix swapped fields if any
+    clean_banks = {}
+    for b_key, b_info in settings["banks"].items():
+        if isinstance(b_info, dict):
+            # Check if name looks like a person's name by mistake
+            name_val = str(b_info.get("name", ""))
+            owner_val = str(b_info.get("owner", ""))
+            
+            if ("Nesredin" in name_val or "Redi" in name_val or "Aymen" in name_val) and b_key in DEFAULT_SETTINGS["banks"]:
+                # Restore clean default name for standard banks
+                clean_banks[b_key] = {
+                    "name": DEFAULT_SETTINGS["banks"][b_key]["name"],
+                    "owner": name_val if "Nesredin" in name_val else owner_val,
+                    "number": str(b_info.get("number", ""))
+                }
+            else:
+                clean_banks[b_key] = b_info
+        else:
+            if b_key in DEFAULT_SETTINGS["banks"]:
+                clean_banks[b_key] = DEFAULT_SETTINGS["banks"][b_key]
+                
+    settings["banks"] = clean_banks
     return settings
 
 async def get_super_admin_id() -> int:
@@ -133,7 +156,7 @@ def get_all_users_sync_list(users_dict):
         return []
     return list(users_dict.keys())
 
-# Dynamic Banks Keyboard Generator (Fixed mapping)
+# Dynamic Banks Keyboard Generator (Strict Name Helper)
 def build_banks_keyboard(banks_dict: dict, callback_prefix: str) -> InlineKeyboardMarkup:
     buttons = []
     row = []
