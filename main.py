@@ -132,7 +132,7 @@ async def get_settings():
     settings["banks"] = clean_banks
     return settings
 
-# Helper for rendering Emojis or Custom Emoji IDs
+# Helper for rendering Emojis or Custom Emoji IDs in HTML Message text
 def render_emoji(emoji_val: str, default="🏛") -> str:
     if not emoji_val:
         return default
@@ -141,6 +141,7 @@ def render_emoji(emoji_val: str, default="🏛") -> str:
         return f'<tg-emoji emoji-id="{emoji_val}">⭐</tg-emoji>'
     return emoji_val
 
+# Helper for Button Labels (Inline Keyboard doesn't support html tags)
 def get_btn_icon(emoji_val: str, default="🏛") -> str:
     if not emoji_val or str(emoji_val).strip().isdigit():
         return default
@@ -252,10 +253,7 @@ class EditSettingsState(StatesGroup):
     waiting_for_stock_etb = State()
     waiting_for_stock_data = State()
     waiting_for_stock_gemini = State()
-    waiting_for_edit_bank_name = State()
-    waiting_for_edit_bank_emoji = State()
-    waiting_for_edit_bank_num = State()
-    waiting_for_edit_bank_owner = State()
+    waiting_for_edit_bank_single_field = State()
     waiting_for_edit_crypto_val = State()
     waiting_for_new_bank_key = State()
     waiting_for_new_bank_name = State()
@@ -288,12 +286,16 @@ async def get_main_menu_keyboard():
         ]
     ])
 
+# 🔵 Animated Telegram Premium Verification Badge Custom Emoji ID
+VERIFY_BADGE_ID = "5427007290130630526"
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+    
     welcome_text = (
-        f"👋 ሰላም <b>{message.from_user.first_name}</b> እንኳን ደህና መጡ!\n\n"
-        "🇪🇹 <b>Neon-Store — Ethiopian P2P Marketplace</b>\n"
+        f"👋 ሰላም <b>{message.from_user.first_name}</b> {verify_badge_html} እንኳን ደህና መጡ!\n\n"
+        f"🇪🇹 <b>Neon-Store — Ethiopian P2P Marketplace</b> {verify_badge_html}\n"
         "የኢትዮጵያ P2P ክሪፕቶ እና ዲጂታል እቃዎች ማርኬት\n\n"
         "Choose an option below | ከታች ካሉት አማራጮች ይምረጡ፦"
     )
@@ -552,7 +554,7 @@ async def process_stock_gemini(message: types.Message, state: FSMContext):
         await state.clear()
     except ValueError: await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦")
 
-# Edit & Delete Banks & Crypto Addresses
+# Edit & Delete Banks & Crypto Addresses (With Sub-Menu Inline Keyboards)
 @dp.callback_query(F.data == "admin_edit_banks")
 async def show_edit_banks_list(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id): return
@@ -574,7 +576,7 @@ async def show_edit_banks_list(callback: types.CallbackQuery):
         
         text += f"• {b_emoji} <b>{b_name}</b>: {b_num} ({b_owner})\n"
         buttons.append([
-            InlineKeyboardButton(text=f"✏️ Edit {b_name}", callback_data=f"ebank_{b_key}"),
+            InlineKeyboardButton(text=f"⚙️ Manage {b_name}", callback_data=f"ebank_menu_{b_key}"),
             InlineKeyboardButton(text=f"🗑 Delete", callback_data=f"delbank_{b_key}")
         ])
         
@@ -588,6 +590,75 @@ async def show_edit_banks_list(callback: types.CallbackQuery):
     
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("ebank_menu_"))
+async def show_bank_edit_submenu(callback: types.CallbackQuery):
+    b_key = callback.data.replace("ebank_menu_", "")
+    settings = await get_settings()
+    b_info = settings.get("banks", {}).get(b_key, {})
+    
+    if isinstance(b_info, dict):
+        b_name = b_info.get("name", b_key.upper())
+        b_emoji = render_emoji(b_info.get("emoji"), "🏛")
+        b_num = b_info.get("number", "")
+        b_owner = b_info.get("owner", "")
+    else:
+        b_name, b_emoji, b_num, b_owner = b_key.upper(), "🏛", "", ""
+
+    text = (
+        f"🏛 <b>Manage {b_name}</b>\n\n"
+        f"• Current Name: <b>{b_name}</b>\n"
+        f"• Current Emoji/ID: {b_emoji}\n"
+        f"• Account Number: <code>{b_num}</code>\n"
+        f"• Account Owner: <b>{b_owner}</b>\n\n"
+        "ቀይር የሚፈልጉትን መረጃ በይነ-ገጽ (Inline Keyboard) ይምረጡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Edit Name (ስም ቀይር)", callback_data=f"ebfield_{b_key}_name")],
+        [InlineKeyboardButton(text="🎨 Edit Logo/Emoji (ሎጎ ቀይር)", callback_data=f"ebfield_{b_key}_emoji")],
+        [InlineKeyboardButton(text="🔢 Edit Account Number (ቁጥር ቀይር)", callback_data=f"ebfield_{b_key}_number")],
+        [InlineKeyboardButton(text="👤 Edit Owner Name (ባለቤት ቀይር)", callback_data=f"ebfield_{b_key}_owner")],
+        [InlineKeyboardButton(text="🔙 Back to Banks List", callback_data="admin_edit_banks")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("ebfield_"))
+async def start_edit_bank_single_field(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split("_")
+    b_key = parts[1]
+    field = parts[2]
+    
+    field_prompts = {
+        "name": "አዲሱን የባንክ ይፋዊ ስም ያስገቡ (ምሳሌ: CBE (ንግድ ባንክ))፦",
+        "emoji": "አዲሱን የባንክ ኢሞጂ ወይም Custom Emoji ID ያስገቡ (ምሳሌ: 🏦, 📱, 🦁, ወይም ID: <code>5368324...</code>)፦",
+        "number": "አዲሱን የባንክ/ቴሌብር ሂሳብ ቁጥር ያስገቡ፦",
+        "owner": "በተቋሙ የተመዘገበውን አዲሱን የባለቤት ሙሉ ስም ያስገቡ፦"
+    }
+    
+    await state.update_data(edit_b_key=b_key, edit_b_field=field)
+    await state.set_state(EditSettingsState.waiting_for_edit_bank_single_field)
+    await callback.message.edit_text(field_prompts.get(field, "አዲሱን መረጃ ያስገቡ፦"), parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_edit_bank_single_field)
+async def process_save_bank_single_field(message: types.Message, state: FSMContext):
+    new_val = message.text.strip()
+    data = await state.get_data()
+    b_key = data.get("edit_b_key")
+    field = data.get("edit_b_field")
+    
+    settings = await get_settings()
+    if "banks" not in settings: settings["banks"] = {}
+    if b_key not in settings["banks"] or not isinstance(settings["banks"][b_key], dict):
+        settings["banks"][b_key] = {"name": b_key.upper(), "emoji": "🏛", "number": "", "owner": ""}
+        
+    settings["banks"][b_key][field] = new_val
+    await fb_put("settings", settings)
+    
+    b_name = settings["banks"][b_key].get("name", b_key.upper())
+    await message.answer(f"✅ የ <b>{b_name}</b> መረጃ ({field.upper()}) በተሳካ ሁኔታ ተቀይሯል!", parse_mode="HTML")
+    await state.clear()
 
 @dp.callback_query(F.data.startswith("delbank_"))
 async def confirm_delete_bank(callback: types.CallbackQuery):
@@ -610,58 +681,6 @@ async def process_delete_bank(callback: types.CallbackQuery):
     await fb_delete(f"settings/banks/{b_key}")
     await callback.answer("✅ ባንኩ ሙሉ በሙሉ ተሰርዟል!")
     await show_edit_banks_list(callback)
-
-@dp.callback_query(F.data.startswith("ebank_"))
-async def start_edit_single_bank(callback: types.CallbackQuery, state: FSMContext):
-    b_key = callback.data.replace("ebank_", "")
-    await state.update_data(target_bank_key=b_key)
-    await state.set_state(EditSettingsState.waiting_for_edit_bank_name)
-    await callback.message.edit_text(f"🏛 ለ <b>{b_key.upper()}</b> አዲሱን የባንክ ይፋዊ ስም ያስገቡ (ምሳሌ: CBE (ንግድ ባንክ))፦", parse_mode="HTML")
-    await callback.answer()
-
-@dp.message(EditSettingsState.waiting_for_edit_bank_name)
-async def process_edit_bank_name(message: types.Message, state: FSMContext):
-    new_name = message.text.strip()
-    await state.update_data(new_bank_name=new_name)
-    await state.set_state(EditSettingsState.waiting_for_edit_bank_emoji)
-    await message.answer("🎨 የባንኩን ኢሞጂ ወይም Custom Emoji ID ያስገቡ (ምሳሌ: 🏦, 📱, 🦁, ወይም ID: <code>5368324...</code>)፦", parse_mode="HTML")
-
-@dp.message(EditSettingsState.waiting_for_edit_bank_emoji)
-async def process_edit_bank_emoji(message: types.Message, state: FSMContext):
-    new_emoji = message.text.strip()
-    await state.update_data(new_bank_emoji=new_emoji)
-    await state.set_state(EditSettingsState.waiting_for_edit_bank_num)
-    await message.answer("🔢 አዲሱን የባንክ/ቴሌብር ሂሳብ ቁጥር ያስገቡ፦", parse_mode="HTML")
-
-@dp.message(EditSettingsState.waiting_for_edit_bank_num)
-async def process_edit_bank_num(message: types.Message, state: FSMContext):
-    new_num = message.text.strip()
-    await state.update_data(new_bank_num=new_num)
-    await state.set_state(EditSettingsState.waiting_for_edit_bank_owner)
-    await message.answer("👤 በባንኩ/ቴሌብር የተመዘገበውን አዲሱን የባለቤት ሙሉ ስም ያስገቡ፦", parse_mode="HTML")
-
-@dp.message(EditSettingsState.waiting_for_edit_bank_owner)
-async def process_edit_bank_owner(message: types.Message, state: FSMContext):
-    new_owner = message.text.strip()
-    data = await state.get_data()
-    b_key = data.get("target_bank_key")
-    new_name = data.get("new_bank_name")
-    new_emoji = data.get("new_bank_emoji", "🏛")
-    new_num = data.get("new_bank_num")
-    
-    settings = await get_settings()
-    if "banks" not in settings: settings["banks"] = {}
-    
-    settings["banks"][b_key] = {
-        "name": new_name,
-        "emoji": new_emoji,
-        "number": new_num,
-        "owner": new_owner
-    }
-    await fb_put("settings", settings)
-    rendered = render_emoji(new_emoji, "🏛")
-    await message.answer(f"✅ {rendered} <b>{new_name}</b> በተሳካ ሁኔታ ተስተካክሏል!\n\nName: {new_name}\nEmoji/ID: {new_emoji}\nNumber: {new_num}\nOwner: {new_owner}", parse_mode="HTML")
-    await state.clear()
 
 @dp.callback_query(F.data.startswith("ecrypto_"))
 async def start_edit_crypto_address(callback: types.CallbackQuery, state: FSMContext):
@@ -1114,7 +1133,7 @@ async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
         return
 
     text = (
-        "💰 <b>Buy USDT | USDT መግዛት</b>\n\n"
+        " 🟢 <b>Buy USDT | USDT መግዛት</b>\n\n"
         f"• Available stock (የአሁን መጠን): <b>{stock} USDT</b>\n"
         f"• Rate (ተመን): 1 USDT = {buy_rate} ETB\n"
         f"• Min / Max (ዝቅተኛ / ከፍተኛ): 0.5 - {min(stock, 10000.0)} USDT\n\n"
@@ -1778,7 +1797,7 @@ async def start_gemini_pro(callback: types.CallbackQuery, state: FSMContext):
         return
 
     text = (
-        "✨ <b>Gemini Pro 18m</b>\n\n"
+        "✨✨️✨️ <b>Gemini Pro 18m</b>\n\n"
         f"🏷 <b>Price:</b> {gemini_price:,.2f} ETB each\n"
         f"🔥 <b>In stock:</b> <b>{stock} pcs</b>\n\n"
         "📄 <b>DESCRIPTION:</b>\n"
@@ -1808,7 +1827,7 @@ async def select_gemini_payment_method(callback: types.CallbackQuery, state: FSM
     keyboard = build_banks_keyboard(banks, "gem_pay")
 
     text = (
-        f"✨ <b>Gemini Pro 18m — {gemini_price:,.2f} ETB</b>\n\n"
+        f"✨✨️✨️ <b>Gemini Pro 18m — {gemini_price:,.2f} ETB</b>\n\n"
         "እባክዎ ክፍያ የሚፈጽሙበትን የባንክ/ቴሌብር መንገድ ይምረጡ፦"
     )
     await state.set_state(GeminiProState.waiting_for_payment_method)
@@ -1833,7 +1852,7 @@ async def process_gemini_payment_info(callback: types.CallbackQuery, state: FSMC
     gemini_price = prices.get("gemini_pro", 350.0)
 
     text = (
-        "✨ <b>Gemini Pro 18m Activation Link</b>\n"
+        "✨✨️✨️ <b>Gemini Pro 18m Activation Link</b>\n"
         f"💰 Amount to pay: <b>{gemini_price:,.2f} ETB</b>\n\n"
         f"{b_emoji} <b>{b_name} Payment Info</b>\n\n"
         f"Number/Account: <b>{b_acc}</b>\n"
@@ -1870,7 +1889,7 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
     await fb_put(f"user_orders/{user.id}/{ord_key}", order_data)
 
     admin_text = (
-        f"✨ <b>New Gemini Pro 18m Order! (#{ord_key[:6]})</b>\n\n"
+        f"✨✨️✨️<b>New Gemini Pro 18m Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 Customer: {user.full_name} (@{user.username if user.username else 'None'}, ID: <code>{user.id}</code>)\n"
         f"💵 Price: {gemini_price:,.2f} ETB\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
