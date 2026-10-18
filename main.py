@@ -177,6 +177,7 @@ def build_banks_keyboard(banks_dict: dict, callback_prefix: str) -> InlineKeyboa
     buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
 # ==========================================
 # 📝 FSM STATES
 # ==========================================
