@@ -68,13 +68,19 @@ async def fb_delete(path: str):
 # ==========================================
 DEFAULT_SETTINGS = {
     "rates": {"buy": 197.0, "sell": 182.0},
+    "stocks": {
+        "usdt": 98.0,
+        "etb_reserve": 10000.0,
+        "unlimited_data": 2,
+        "gemini_pro": 34
+    },
     "banks": {
-        "telebirr": {"name": "Aymen Nesredin Redi", "number": "0939357745"},
-        "cbe": {"name": "Aymen Nesredin Redi", "number": "1000780294322"},
-        "coop": {"name": "Aymen Nesredin Redi", "number": "1947701000001"},
-        "awash": {"name": "Nesredin Redi", "number": "01425174740300"},
-        "abyssinia": {"name": "Nesredin Redi", "number": "100404915"},
-        "dashen": {"name": "Nesredin Redi", "number": "2912539951521"}
+        "telebirr": {"name": "Telebirr", "owner": "Aymen Nesredin Redi", "number": "0939357745"},
+        "cbe": {"name": "CBE (ንግድ ባንክ)", "owner": "Aymen Nesredin Redi", "number": "1000780294322"},
+        "coop": {"name": "COOP Bank", "owner": "Aymen Nesredin Redi", "number": "1947701000001"},
+        "awash": {"name": "Awash Bank", "owner": "Nesredin Redi", "number": "01425174740300"},
+        "abyssinia": {"name": "Bank of Abyssinia", "owner": "Nesredin Redi", "number": "100404915"},
+        "dashen": {"name": "Dashen Bank", "owner": "Nesredin Redi", "number": "2912539951521"}
     },
     "crypto": {
         "bybit_uid": "580130044",
@@ -88,6 +94,11 @@ async def get_settings():
     if not settings:
         await fb_put("settings", DEFAULT_SETTINGS)
         return DEFAULT_SETTINGS
+    
+    # Ensure nested keys exist
+    if "stocks" not in settings: settings["stocks"] = DEFAULT_SETTINGS["stocks"]
+    if "banks" not in settings: settings["banks"] = DEFAULT_SETTINGS["banks"]
+    if "crypto" not in settings: settings["crypto"] = DEFAULT_SETTINGS["crypto"]
     return settings
 
 async def get_super_admin_id() -> int:
@@ -121,6 +132,11 @@ def get_all_users_sync_list(users_dict):
     if not users_dict:
         return []
     return list(users_dict.keys())
+
+# Dynamic Banks Keyboard Generator
+def build_banks_keyboard(callback_prefix: str):
+    # Synchronous builder helper or can be called inside handlers
+    pass
 
 # ==========================================
 # 📝 FSM STATES
@@ -171,6 +187,17 @@ class EditSettingsState(StatesGroup):
     waiting_for_sell_rate = State()
     waiting_for_new_admin_id = State()
     waiting_for_transfer_super_id = State()
+    waiting_for_stock_usdt = State()
+    waiting_for_stock_etb = State()
+    waiting_for_stock_data = State()
+    waiting_for_stock_gemini = State()
+    waiting_for_edit_bank_num = State()
+    waiting_for_edit_bank_owner = State()
+    waiting_for_edit_crypto_val = State()
+    waiting_for_new_bank_key = State()
+    waiting_for_new_bank_name = State()
+    waiting_for_new_bank_owner = State()
+    waiting_for_new_bank_num = State()
 
 # Main Menu Keyboard
 def get_main_menu_keyboard():
@@ -239,22 +266,285 @@ async def cmd_admin_panel(message: types.Message):
     
     if role in ["SUPER_ADMIN", "FULL"]:
         buttons.append([
-            InlineKeyboardButton(text="💵 Edit Rates (ተመን ቀይር)", callback_data="admin_edit_rates"),
-            InlineKeyboardButton(text="🏛 Edit Banks (ባንኮች ቀይር)", callback_data="admin_edit_banks")
+            InlineKeyboardButton(text="💵 Edit Rates", callback_data="admin_edit_rates"),
+            InlineKeyboardButton(text="📦 Edit Stocks & Reserves", callback_data="admin_edit_stocks")
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="🏛 Edit Banks & Crypto", callback_data="admin_edit_banks"),
+            InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")
         ])
         
+    if role in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
+        buttons.append([InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats")])
+
     if role in ["SUPER_ADMIN", "FULL", "BROADCAST"]:
         buttons.append([InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")])
         
     if role == "SUPER_ADMIN":
         buttons.append([
-            InlineKeyboardButton(text="📜 Admin List (የአድሚኖች ዝርዝር)", callback_data="admin_list"),
-            InlineKeyboardButton(text="➕ Add Admin (አድሚን ጨምር)", callback_data="admin_add_admin")
+            InlineKeyboardButton(text="📜 Admin List", callback_data="admin_list"),
+            InlineKeyboardButton(text="➕ Add Admin", callback_data="admin_add_admin")
         ])
         buttons.append([InlineKeyboardButton(text="👑 Transfer Super Admin Ownership", callback_data="admin_transfer_super_start")])
         
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
+@dp.callback_query(F.data == "admin_back")
+async def admin_back_handler(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    role = await get_admin_role(callback.from_user.id)
+    if role == "NONE": return
+    
+    role_labels = {
+        "SUPER_ADMIN": "👑 Super Admin (Owner)", "FULL": "🛡 Full Access Admin",
+        "ORDERS_SUPPORT": "📦 Orders & Support Admin", "BROADCAST": "📢 Broadcaster Admin"
+    }
+    text = f"👑 <b>Admin Control Panel | የአስተዳዳሪ ፓነል</b>\n\n<b>Your Role:</b> {role_labels.get(role, role)}\n\nእባክዎ ማስተካከል የሚፈልጉትን ይምረጡ፦"
+    
+    buttons = []
+    if role in ["SUPER_ADMIN", "FULL"]:
+        buttons.append([InlineKeyboardButton(text="💵 Edit Rates", callback_data="admin_edit_rates"), InlineKeyboardButton(text="📦 Edit Stocks & Reserves", callback_data="admin_edit_stocks")])
+        buttons.append([InlineKeyboardButton(text="🏛 Edit Banks & Crypto", callback_data="admin_edit_banks"), InlineKeyboardButton(text="➕ Add New Bank", callback_data="admin_add_bank")])
+    if role in ["SUPER_ADMIN", "FULL", "ORDERS_SUPPORT"]:
+        buttons.append([InlineKeyboardButton(text="📊 Bot Dashboard Stats", callback_data="admin_bot_stats")])
+    if role in ["SUPER_ADMIN", "FULL", "BROADCAST"]:
+        buttons.append([InlineKeyboardButton(text="📢 Broadcast Message", callback_data="admin_start_broadcast")])
+    if role == "SUPER_ADMIN":
+        buttons.append([InlineKeyboardButton(text="📜 Admin List", callback_data="admin_list"), InlineKeyboardButton(text="➕ Add Admin", callback_data="admin_add_admin")])
+        buttons.append([InlineKeyboardButton(text="👑 Transfer Super Admin Ownership", callback_data="admin_transfer_super_start")])
+        
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_bot_stats")
+async def show_bot_stats(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    users = await fb_get("users") or {}
+    orders = await fb_get("orders") or {}
+    
+    total_users = len(users)
+    total_orders = len(orders)
+    pending_orders = len([o for o in orders.values() if isinstance(o, dict) and o.get("status") == "PENDING"])
+    approved_orders = len([o for o in orders.values() if isinstance(o, dict) and o.get("status") == "APPROVED"])
+    
+    text = (
+        "📊 <b>Bot Dashboard Statistics</b>\n\n"
+        f"👥 <b>Total Users:</b> {total_users}\n"
+        f"📦 <b>Total Orders Sent:</b> {total_orders}\n"
+        f"⏳ <b>Pending Orders:</b> {pending_orders}\n"
+        f"✅ <b>Approved Orders:</b> {approved_orders}\n"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Admin Panel", callback_data="admin_back")]])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+# Stock Management
+@dp.callback_query(F.data == "admin_edit_stocks")
+async def show_stock_menu(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    settings = await get_settings()
+    stocks = settings.get("stocks", {})
+    
+    text = (
+        "📦 <b>Current Stocks & ETB Reserves:</b>\n\n"
+        f"• USDT Stock: <b>{stocks.get('usdt', 0.0)} USDT</b>\n"
+        f"• ETB Reserve (for Sell): <b>{stocks.get('etb_reserve', 0.0):,.2f} ETB</b>\n"
+        f"• Monthly Unlimited Data: <b>{stocks.get('unlimited_data', 0)} pcs</b>\n"
+        f"• Gemini Pro 18m: <b>{stocks.get('gemini_pro', 0)} pcs</b>\n\n"
+        "ማስተካከል የሚፈልጉትን ይምረጡ፦"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💵 Update USDT Stock", callback_data="stk_usdt"), InlineKeyboardButton(text="💰 Update ETB Reserve", callback_data="stk_etb")],
+        [InlineKeyboardButton(text="🌐 Update Data Stock", callback_data="stk_data"), InlineKeyboardButton(text="✨ Update Gemini Stock", callback_data="stk_gemini")],
+        [InlineKeyboardButton(text="🔙 Back to Admin Panel", callback_data="admin_back")]
+    ])
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("stk_"))
+async def start_stock_update(callback: types.CallbackQuery, state: FSMContext):
+    target = callback.data
+    if target == "stk_usdt":
+        await state.set_state(EditSettingsState.waiting_for_stock_usdt)
+        await callback.message.edit_text("አዲሱን የ <b>USDT Stock</b> መጠን ያስገቡ (ምሳሌ: 500)፦", parse_mode="HTML")
+    elif target == "stk_etb":
+        await state.set_state(EditSettingsState.waiting_for_stock_etb)
+        await callback.message.edit_text("አዲሱን የ <b>ETB Payout Reserve</b> ብር መጠን ያስገቡ (ምሳሌ: 25000)፦", parse_mode="HTML")
+    elif target == "stk_data":
+        await state.set_state(EditSettingsState.waiting_for_stock_data)
+        await callback.message.edit_text("አዲሱን የ <b>Unlimited Data</b> ብዛት ያስገቡ (ምሳሌ: 5)፦", parse_mode="HTML")
+    elif target == "stk_gemini":
+        await state.set_state(EditSettingsState.waiting_for_stock_gemini)
+        await callback.message.edit_text("አዲሱን የ <b>Gemini Pro</b> ብዛት ያስገቡ (ምሳሌ: 50)፦", parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_stock_usdt)
+async def process_stock_usdt(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip())
+        settings = await get_settings()
+        settings["stocks"]["usdt"] = val
+        await fb_put("settings", settings)
+        await message.answer(f"✅ USDT Stock ወደ <b>{val} USDT</b> ተቀይሯል!", parse_mode="HTML")
+        await state.clear()
+    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+
+@dp.message(EditSettingsState.waiting_for_stock_etb)
+async def process_stock_etb(message: types.Message, state: FSMContext):
+    try:
+        val = float(message.text.strip())
+        settings = await get_settings()
+        settings["stocks"]["etb_reserve"] = val
+        await fb_put("settings", settings)
+        await message.answer(f"✅ ETB Payout Reserve ወደ <b>{val:,.2f} ETB</b> ተቀይሯል!", parse_mode="HTML")
+        await state.clear()
+    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
+
+@dp.message(EditSettingsState.waiting_for_stock_data)
+async def process_stock_data(message: types.Message, state: FSMContext):
+    try:
+        val = int(message.text.strip())
+        settings = await get_settings()
+        settings["stocks"]["unlimited_data"] = val
+        await fb_put("settings", settings)
+        await message.answer(f"✅ Unlimited Data Stock ወደ <b>{val} pcs</b> ተቀይሯል!", parse_mode="HTML")
+        await state.clear()
+    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦")
+
+@dp.message(EditSettingsState.waiting_for_stock_gemini)
+async def process_stock_gemini(message: types.Message, state: FSMContext):
+    try:
+        val = int(message.text.strip())
+        settings = await get_settings()
+        settings["stocks"]["gemini_pro"] = val
+        await fb_put("settings", settings)
+        await message.answer(f"✅ Gemini Pro Stock ወደ <b>{val} pcs</b> ተቀይሯል!", parse_mode="HTML")
+        await state.clear()
+    except ValueError: await message.answer("❌ እባክዎ ትክክለኛ የቁጥር ብዛት ያስገቡ፦")
+
+# Edit Banks & Crypto Addresses
+@dp.callback_query(F.data == "admin_edit_banks")
+async def show_edit_banks_list(callback: types.CallbackQuery):
+    if not await is_admin(callback.from_user.id): return
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    crypto = settings.get("crypto", {})
+    
+    text = "🏛 <b>Current Banks & Crypto Addresses:</b>\n\n"
+    buttons = []
+    
+    for b_key, b_info in banks.items():
+        text += f"• <b>{b_info.get('name')}</b>: {b_info.get('number')} ({b_info.get('owner')})\n"
+        buttons.append([InlineKeyboardButton(text=f"✏️ Edit {b_info.get('name')}", callback_data=f"ebank_{b_key}")])
+        
+    text += f"\n<b>Crypto Addresses:</b>\n• Bybit: <code>{crypto.get('bybit_uid')}</code>\n• BEP20: <code>{crypto.get('bep20_address')}</code>\n• Polygon: <code>{crypto.get('polygon_address')}</code>\n"
+    buttons.append([
+        InlineKeyboardButton(text="✏️ Edit Bybit UID", callback_data="ecrypto_bybit_uid"),
+        InlineKeyboardButton(text="✏️ Edit BEP20", callback_data="ecrypto_bep20_address")
+    ])
+    buttons.append([InlineKeyboardButton(text="✏️ Edit Polygon", callback_data="ecrypto_polygon_address")])
+    buttons.append([InlineKeyboardButton(text="🔙 Back to Admin Panel", callback_data="admin_back")])
+    
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("ebank_"))
+async def start_edit_single_bank(callback: types.CallbackQuery, state: FSMContext):
+    b_key = callback.data.replace("ebank_", "")
+    await state.update_data(target_bank_key=b_key)
+    await state.set_state(EditSettingsState.waiting_for_edit_bank_num)
+    await callback.message.edit_text(f"🏛 ለ <b>{b_key.upper()}</b> አዲሱን የባንክ/ስልክ ቁጥር ያስገቡ፦", parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_edit_bank_num)
+async def process_edit_bank_num(message: types.Message, state: FSMContext):
+    new_num = message.text.strip()
+    await state.update_data(new_bank_num=new_num)
+    await state.set_state(EditSettingsState.waiting_for_edit_bank_owner)
+    await message.answer("👤 በባንኩ/ቴሌብር የተመዘገበውን አዲሱን የባለቤት ሙሉ ስም ያስገቡ፦", parse_mode="HTML")
+
+@dp.message(EditSettingsState.waiting_for_edit_bank_owner)
+async def process_edit_bank_owner(message: types.Message, state: FSMContext):
+    new_owner = message.text.strip()
+    data = await state.get_data()
+    b_key = data.get("target_bank_key")
+    new_num = data.get("new_bank_num")
+    
+    settings = await get_settings()
+    if b_key in settings["banks"]:
+        settings["banks"][b_key]["number"] = new_num
+        settings["banks"][b_key]["owner"] = new_owner
+        await fb_put("settings", settings)
+        await message.answer(f"✅ <b>{b_key.upper()}</b> በተሳካ ሁኔታ ተስተካክሏል!\n\nNumber: {new_num}\nOwner: {new_owner}", parse_mode="HTML")
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("ecrypto_"))
+async def start_edit_crypto_address(callback: types.CallbackQuery, state: FSMContext):
+    c_key = callback.data.replace("ecrypto_", "")
+    await state.update_data(target_crypto_key=c_key)
+    await state.set_state(EditSettingsState.waiting_for_edit_crypto_val)
+    await callback.message.edit_text(f"🌐 አዲሱን <b>{c_key.upper()}</b> አድራሻ ያስገቡ፦", parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_edit_crypto_val)
+async def process_edit_crypto_val(message: types.Message, state: FSMContext):
+    new_val = message.text.strip()
+    data = await state.get_data()
+    c_key = data.get("target_crypto_key")
+    
+    settings = await get_settings()
+    settings["crypto"][c_key] = new_val
+    await fb_put("settings", settings)
+    
+    await message.answer(f"✅ <b>{c_key.upper()}</b> አድራሻ በተሳካ ሁኔታ ተቀይሯል!\n\n<code>{new_val}</code>", parse_mode="HTML")
+    await state.clear()
+
+# Add New Bank
+@dp.callback_query(F.data == "admin_add_bank")
+async def start_add_new_bank(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id): return
+    await state.set_state(EditSettingsState.waiting_for_new_bank_key)
+    await callback.message.edit_text("➕ የአዲሱን ባንክ መለያ ቃል ያለ ቦታ (Key) ያስገቡ (ምሳሌ: <code>hibret</code>)፦", parse_mode="HTML")
+    await callback.answer()
+
+@dp.message(EditSettingsState.waiting_for_new_bank_key)
+async def process_new_bank_key(message: types.Message, state: FSMContext):
+    key = message.text.strip().lower().replace(" ", "_")
+    await state.update_data(new_b_key=key)
+    await state.set_state(EditSettingsState.waiting_for_new_bank_name)
+    await message.answer("የባንኩን ይፋዊ ስም ያስገቡ (ምሳሌ: <b>Hibret Bank</b>)፦", parse_mode="HTML")
+
+@dp.message(EditSettingsState.waiting_for_new_bank_name)
+async def process_new_bank_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    await state.update_data(new_b_name=name)
+    await state.set_state(EditSettingsState.waiting_for_new_bank_owner)
+    await message.answer("የባለቤቱን ሙሉ ስም ያስገቡ፦", parse_mode="HTML")
+
+@dp.message(EditSettingsState.waiting_for_new_bank_owner)
+async def process_new_bank_owner(message: types.Message, state: FSMContext):
+    owner = message.text.strip()
+    await state.update_data(new_b_owner=owner)
+    await state.set_state(EditSettingsState.waiting_for_new_bank_num)
+    await message.answer("የባንክ አካውንት ቁጥሩን ያስገቡ፦", parse_mode="HTML")
+
+@dp.message(EditSettingsState.waiting_for_new_bank_num)
+async def process_new_bank_num(message: types.Message, state: FSMContext):
+    num = message.text.strip()
+    data = await state.get_data()
+    
+    b_key = data.get("new_b_key")
+    b_name = data.get("new_b_name")
+    b_owner = data.get("new_b_owner")
+    
+    settings = await get_settings()
+    settings["banks"][b_key] = {"name": b_name, "owner": b_owner, "number": num}
+    await fb_put("settings", settings)
+    
+    await message.answer(f"🎉 <b>{b_name}</b> በተሳካ ሁኔታ አዲስ ባንክ ሆኖ ተጨምሯል!\n\nከእንግዲህ ተጠቃሚዎች ክፍያ ሲፈጽሙ እንደ አማራጭ ያገኙታል።", parse_mode="HTML")
+    await state.clear()
+
+# Admin List & Other Roles
 @dp.callback_query(F.data == "admin_list")
 async def show_admin_list(callback: types.CallbackQuery):
     role = await get_admin_role(callback.from_user.id)
@@ -432,24 +722,6 @@ async def process_new_sell_rate(message: types.Message, state: FSMContext):
         await state.clear()
     except ValueError:
         await message.answer("❌ እባክዎ ትክክለኛ ቁጥር ያስገቡ፦")
-
-@dp.callback_query(F.data == "admin_edit_banks")
-async def admin_edit_banks_info(callback: types.CallbackQuery):
-    if not await is_admin(callback.from_user.id): return
-    settings = await get_settings()
-    banks = settings.get("banks", {})
-    text = "🏛 <b>Current Bank Accounts:</b>\n\n"
-    for b_key, b_val in banks.items():
-        text += f"• <b>{b_key.upper()}</b>: {b_val.get('number')} ({b_val.get('name')})\n"
-    text += "\n*(ባንኮችን ለማስተካከል Firebase Console መጠቀም ይቻላል)*"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Admin", callback_data="admin_back")]])
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await callback.answer()
-
-@dp.callback_query(F.data == "admin_back")
-async def admin_back_handler(callback: types.CallbackQuery):
-    await cmd_admin_panel(callback.message)
-    await callback.answer()
 
 @dp.callback_query(F.data == "admin_start_broadcast")
 async def admin_broadcast_start(callback: types.CallbackQuery, state: FSMContext):
@@ -635,25 +907,30 @@ async def send_admin_reply_to_user(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 🟢 BUY USDT WORKFLOW (STRICT VALIDATIONS INCLUDED)
+# 🟢 BUY USDT WORKFLOW (DYNAMIC STOCKS & STRICT VALIDATION)
 # ==========================================
 @dp.callback_query(F.data == "buy_usdt")
 async def start_buy_usdt(callback: types.CallbackQuery, state: FSMContext):
     settings = await get_settings()
     buy_rate = settings.get("rates", {}).get("buy", 197.0)
-    stock = 98.0
+    stock = settings.get("stocks", {}).get("usdt", 0.0)
+    
+    if stock <= 0:
+        await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት USDT stock አልቋል (Out of stock)።", show_alert=True)
+        return
+
     text = (
         "💰 <b>Buy USDT | USDT መግዛት</b>\n\n"
-        f"• Available stock (የአሁን መጠን): {stock} USDT\n"
+        f"• Available stock (የአሁን መጠን): <b>{stock} USDT</b>\n"
         f"• Rate (ተመን): 1 USDT = {buy_rate} ETB\n"
-        f"• Min / Max (ዝቅተኛ / ከፍተኛ): 0.5 - 10000.0 USDT\n\n"
+        f"• Min / Max (ዝቅተኛ / ከፍተኛ): 0.5 - {min(stock, 10000.0)} USDT\n\n"
         "Enter how much USDT you want to buy:\n"
         "ምን ያህል USDT መግዛት ይፈልጋሉ? (ምሳሌ: 10)"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
     await state.set_state(BuyUSDTState.waiting_for_amount)
     msg = await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await state.update_data(last_msg_id=msg.message_id, buy_rate=buy_rate)
+    await state.update_data(last_msg_id=msg.message_id, buy_rate=buy_rate, available_stock=stock)
     await callback.answer()
 
 @dp.message(BuyUSDTState.waiting_for_amount)
@@ -661,13 +938,15 @@ async def process_buy_amount(message: types.Message, state: FSMContext):
     data = await state.get_data()
     last_msg_id = data.get("last_msg_id")
     buy_rate = data.get("buy_rate", 197.0)
+    stock = data.get("available_stock", 0.0)
     try: await message.delete()
     except Exception: pass
         
     try:
         amount = float(message.text)
-        if amount < 0.5 or amount > 10000.0:
-            err_text = "⚠️ እባክዎ ከ 0.5 እስከ 10000.0 USDT መካከል ያስገቡ፦"
+        max_limit = min(stock, 10000.0)
+        if amount < 0.5 or amount > max_limit:
+            err_text = f"⚠️ እባክዎ ከ 0.5 እስከ {max_limit} USDT መካከል ያስገቡ፦"
             if last_msg_id: await bot.edit_message_text(err_text, chat_id=message.chat.id, message_id=last_msg_id)
             return
         
@@ -724,7 +1003,6 @@ async def process_address(message: types.Message, state: FSMContext):
     is_valid = True
     err_msg = ""
 
-    # Strict Validation from Base Code
     if "UID" in network or "Binance" in network or "Bybit" in network:
         if not address.isdigit() or len(address) < 8 or len(address) > 12:
             is_valid = False
@@ -741,6 +1019,20 @@ async def process_address(message: types.Message, state: FSMContext):
     await state.update_data(address=address)
     amount, total_price = data.get("amount"), data.get("total_price")
     
+    # Dynamic Banks Keyboard
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    
+    buttons = []
+    row = []
+    for b_key, b_info in banks.items():
+        row.append(InlineKeyboardButton(text=f"🏛 {b_info.get('name')}", callback_data=f"buy_pay_{b_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
+    
     text = (
         "📬 <b>Receiving destination saved | መድረሻው ተይዟል</b>\n\n"
         f"• USDT: {amount:.4f}\n"
@@ -748,14 +1040,8 @@ async def process_address(message: types.Message, state: FSMContext):
         f"• Destination (መቀበያ): {address}\n\n"
         "ክፍያ የሚፈጽሙበትን የባንክ/ቴሌብር መንገድ ይምረጡ፦"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Telebirr", callback_data="buy_pay_telebirr"), InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="buy_pay_cbe")],
-        [InlineKeyboardButton(text="🏦 COOP Bank", callback_data="buy_pay_coop"), InlineKeyboardButton(text="🦁 Awash Bank", callback_data="buy_pay_awash")],
-        [InlineKeyboardButton(text="🏛 Abyssinia", callback_data="buy_pay_abyssinia"), InlineKeyboardButton(text="🔷 Dashen Bank", callback_data="buy_pay_dashen")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
     await state.set_state(BuyUSDTState.waiting_for_payment_method)
-    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(BuyUSDTState.waiting_for_payment_method, F.data.startswith("buy_pay_"))
 async def buy_payment_selected(callback: types.CallbackQuery, state: FSMContext):
@@ -763,8 +1049,8 @@ async def buy_payment_selected(callback: types.CallbackQuery, state: FSMContext)
     banks = settings.get("banks", {})
     pay_code = callback.data.replace("buy_pay_", "")
     
-    bank_info = banks.get(pay_code, {"name": "Aymen Nesredin Redi", "number": "000000"})
-    b_acc, b_owner = bank_info.get("number"), bank_info.get("name")
+    bank_info = banks.get(pay_code, {"name": pay_code.upper(), "owner": "Admin", "number": "000000"})
+    b_name, b_acc, b_owner = bank_info.get("name"), bank_info.get("number"), bank_info.get("owner")
     
     data = await state.get_data()
     amount, total_price = data.get("amount"), data.get("total_price")
@@ -773,7 +1059,7 @@ async def buy_payment_selected(callback: types.CallbackQuery, state: FSMContext)
         "📋 <b>Order summary</b>\n"
         f"• USDT: {amount:.4f} USDT\n"
         f"• Pay: {total_price:,.2f} ETB\n\n"
-        f"🏛 <b>{pay_code.upper()}</b>\n\n"
+        f"🏛 <b>{b_name}</b>\n\n"
         f"Number/Account: <b>{b_acc}</b>\n"
         f"Name: <b>{b_owner}</b>\n\n"
         "Send the exact ETB amount, then upload a clear receipt screenshot.\n"
@@ -799,7 +1085,7 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
     
     order_data = {
         "user_id": user.id, "user_name": user.full_name, "service": "Buy USDT",
-        "details": f"{amount} USDT to {network}:{address}", "amount": total_price,
+        "details": f"{amount} USDT to {network}:{address}", "amount": total_price, "crypto_amount": amount,
         "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
@@ -825,34 +1111,52 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 🔴 SELL USDT WORKFLOW (STRICT VALIDATIONS INCLUDED)
+# 🔴 SELL USDT WORKFLOW (ETB RESERVE & DYNAMIC BANKS)
 # ==========================================
 @dp.callback_query(F.data == "sell_usdt")
 async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
+    settings = await get_settings()
+    sell_rate = settings.get("rates", {}).get("sell", 182.0)
+    etb_reserve = settings.get("stocks", {}).get("etb_reserve", 0.0)
+    
+    max_usdt_we_can_buy = etb_reserve / sell_rate if sell_rate > 0 else 0.0
+    
+    if etb_reserve <= 0 or max_usdt_we_can_buy < 0.5:
+        await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት የ ETB በጀታችን አልቋል። እባክዎ ትንሽ ቆይተው ይሞክሩ።", show_alert=True)
+        return
+
+    banks = settings.get("banks", {})
+    buttons = []
+    row = []
+    for b_key, b_info in banks.items():
+        row.append(InlineKeyboardButton(text=f"🏛 {b_info.get('name')}", callback_data=f"payout_{b_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
+
     text = (
         "🔴 <b>Sell USDT — Step 1 of 4 | USDT መሸጥ — ደረጃ 1</b>\n\n"
+        f"• Current Sell Rate: <b>1 USDT = {sell_rate} ETB</b>\n"
+        f"• Our ETB Budget: <b>{etb_reserve:,.2f} ETB</b> (Max buy: <b>{max_usdt_we_can_buy:.2f} USDT</b>)\n\n"
         "How would you like to receive your ETB payout?\n"
         "ብር የሚቀበሉበትን የክፍያ መንገድ ይምረጡ፦"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Telebirr", callback_data="payout_telebirr"), InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="payout_cbe")],
-        [InlineKeyboardButton(text="🏦 COOP Bank", callback_data="payout_coop"), InlineKeyboardButton(text="🦁 Awash Bank", callback_data="payout_awash")],
-        [InlineKeyboardButton(text="🏛 Abyssinia", callback_data="payout_abyssinia"), InlineKeyboardButton(text="🔷 Dashen Bank", callback_data="payout_dashen")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
     await state.set_state(SellUSDTState.waiting_for_payout_method)
-    msg = await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await state.update_data(last_msg_id=msg.message_id)
+    msg = await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await state.update_data(last_msg_id=msg.message_id, sell_rate=sell_rate, etb_reserve=etb_reserve, max_usdt_buy=max_usdt_we_can_buy)
     await callback.answer()
 
 @dp.callback_query(SellUSDTState.waiting_for_payout_method, F.data.startswith("payout_"))
 async def select_payout_method(callback: types.CallbackQuery, state: FSMContext):
-    method_map = {
-        "payout_telebirr": "Telebirr", "payout_cbe": "CBE", "payout_coop": "COOP Bank",
-        "payout_awash": "Awash Bank", "payout_abyssinia": "Bank of Abyssinia", "payout_dashen": "Dashen Bank"
-    }
-    method_name = method_map.get(callback.data, "Bank Account")
-    await state.update_data(payout_method=method_name)
+    pay_key = callback.data.replace("payout_", "")
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    
+    b_info = banks.get(pay_key, {"name": pay_key.upper()})
+    method_name = b_info.get("name")
+    await state.update_data(payout_method=method_name, payout_key=pay_key)
     
     text = (
         f"🔴 <b>Step 2 of 4 — {method_name} details | መረጃ ያስገቡ</b>\n\n"
@@ -867,6 +1171,7 @@ async def select_payout_method(callback: types.CallbackQuery, state: FSMContext)
 async def process_account_number(message: types.Message, state: FSMContext):
     data = await state.get_data()
     last_msg_id = data.get("last_msg_id")
+    payout_key = data.get("payout_key", "")
     method = data.get("payout_method")
     account_num = message.text.strip()
     try: await message.delete()
@@ -875,16 +1180,15 @@ async def process_account_number(message: types.Message, state: FSMContext):
     is_valid = True
     err_msg = ""
 
-    # Strict Account Validation
-    if method == "Telebirr":
+    if payout_key == "telebirr":
         if not (account_num.startswith("09") or account_num.startswith("07")) or len(account_num) != 10 or not account_num.isdigit():
             is_valid = False
             err_msg = "⚠️ <b>Telebirr</b> ቁጥር በ '09' ወይም '07' መጀመር እና 10 አሃዞች መሆን አለበት፦"
-    elif method == "CBE":
+    elif payout_key == "cbe":
         if not account_num.startswith("1000") or len(account_num) != 13 or not account_num.isdigit():
             is_valid = False
             err_msg = "⚠️ የ <b>CBE (ንግድ ባንክ)</b> ሂሳብ ቁጥር በ '1000' መጀመር እና 13 አሃዞች መሆን አለበት፦"
-    elif method in ["COOP Bank", "Awash Bank", "Bank of Abyssinia", "Dashen Bank"]:
+    else:
         if not account_num.isdigit() or len(account_num) < 8:
             is_valid = False
             err_msg = f"⚠️ እባክዎ ትክክለኛ የ <b>{method}</b> የሂሳብ ቁጥር ያስገቡ፦"
@@ -1037,24 +1341,30 @@ async def process_premium_username(message: types.Message, state: FSMContext):
     await state.update_data(target_username=clean_username)
     plan_name, price = data.get("plan_name"), data.get("price")
 
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    buttons = []
+    row = []
+    for b_key, b_info in banks.items():
+        row.append(InlineKeyboardButton(text=f"🏛 {b_info.get('name')}", callback_data=f"prem_pay_{b_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
+
     text = f"✈️ <b>{plan_name} Telegram Premium</b>\n👤 Recipient: <b>{clean_username}</b>\n💰 Price: <b>{price:,.2f} ETB</b>\n\nክፍያ የሚፈፅሙበትን መንገድ ይምረጡ፦"
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Telebirr", callback_data="prem_pay_telebirr"), InlineKeyboardButton(text="🏦 CBE", callback_data="prem_pay_cbe")],
-        [InlineKeyboardButton(text="🏦 COOP Bank", callback_data="prem_pay_coop"), InlineKeyboardButton(text="🦁 Awash Bank", callback_data="prem_pay_awash")],
-        [InlineKeyboardButton(text="🏛 Abyssinia", callback_data="prem_pay_abyssinia"), InlineKeyboardButton(text="🔷 Dashen Bank", callback_data="prem_pay_dashen")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
     await state.set_state(TelegramPremiumState.waiting_for_payment_method)
-    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(TelegramPremiumState.waiting_for_payment_method, F.data.startswith("prem_pay_"))
 async def process_premium_payment_method(callback: types.CallbackQuery, state: FSMContext):
     settings = await get_settings()
     banks = settings.get("banks", {})
     pay_code = callback.data.replace("prem_pay_", "")
-    bank_info = banks.get(pay_code, {"name": "Aymen Nesredin Redi", "number": "000000"})
+    bank_info = banks.get(pay_code, {"name": pay_code.upper(), "owner": "Admin", "number": "000000"})
     
-    text = f"🏛 <b>{pay_code.upper()} Payment Info</b>\nAccount: <b>{bank_info.get('number')}</b>\nName: <b>{bank_info.get('name')}</b>\n\nከፍለው ግልጽ የክፍያ ስክሪንሾት ይላኩ፦"
+    text = f"🏛 <b>{bank_info.get('name')} Payment Info</b>\nAccount: <b>{bank_info.get('number')}</b>\nName: <b>{bank_info.get('owner')}</b>\n\nከፍለው ግልጽ የክፍያ ስክሪንሾት ይላኩ፦"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
     await state.set_state(TelegramPremiumState.waiting_for_proof)
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
@@ -1099,14 +1409,21 @@ async def process_premium_proof_photo(message: types.Message, state: FSMContext)
     await state.clear()
 
 # ==========================================
-# 🌐 MONTHLY UNLIMITED DATA (FULL DESCRIPTIONS & STRICT VALIDATION)
+# 🌐 MONTHLY UNLIMITED DATA WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "unlimited_data")
 async def start_unlimited_data(callback: types.CallbackQuery, state: FSMContext):
+    settings = await get_settings()
+    stock = settings.get("stocks", {}).get("unlimited_data", 0)
+    
+    if stock <= 0:
+        await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት Monthly Unlimited Data stock አልቋል (Out of stock)።", show_alert=True)
+        return
+
     text = (
         "🌐 <b>Monthly Unlimited Data</b>\n\n"
         "🏷 <b>Price:</b> 1,576.00 ETB each\n"
-        "🔥 <b>In stock:</b> 2\n\n"
+        f"🔥 <b>In stock:</b> <b>{stock} pcs</b>\n\n"
         "🔥 <b>Special Offer</b>\n"
         "🍃 <b>Validity:</b> 30 Days\n"
         "⚡ <b>Speed:</b> Fast\n\n"
@@ -1144,7 +1461,6 @@ async def process_data_phone_number(message: types.Message, state: FSMContext):
     try: await message.delete()
     except Exception: pass
 
-    # Strict Phone Number Validation from Base Code
     if not (phone_num.startswith("09") or phone_num.startswith("07")) or len(phone_num) != 10 or not phone_num.isdigit():
         if last_msg_id:
             await bot.edit_message_text(
@@ -1155,26 +1471,32 @@ async def process_data_phone_number(message: types.Message, state: FSMContext):
 
     await state.update_data(data_phone=phone_num)
 
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    buttons = []
+    row = []
+    for b_key, b_info in banks.items():
+        row.append(InlineKeyboardButton(text=f"🏛 {b_info.get('name')}", callback_data=f"data_pay_{b_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
+
     text = (
         "🌐 <b>Monthly Unlimited Data — 1,576.00 ETB</b>\n"
         f"📱 Target Phone: <b>{phone_num}</b>\n\n"
         "እባክዎ ክፍያ የሚፈጽሙበትን የባንክ/ቴሌብር መንገድ ይምረጡ፦"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Telebirr", callback_data="data_pay_telebirr"), InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="data_pay_cbe")],
-        [InlineKeyboardButton(text="🏦 COOP Bank", callback_data="data_pay_coop"), InlineKeyboardButton(text="🦁 Awash Bank", callback_data="data_pay_awash")],
-        [InlineKeyboardButton(text="🏛 Abyssinia", callback_data="data_pay_abyssinia"), InlineKeyboardButton(text="🔷 Dashen Bank", callback_data="data_pay_dashen")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
     await state.set_state(UnlimitedDataState.waiting_for_payment_method)
-    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+    if last_msg_id: await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 @dp.callback_query(UnlimitedDataState.waiting_for_payment_method, F.data.startswith("data_pay_"))
 async def process_data_payment_info(callback: types.CallbackQuery, state: FSMContext):
     settings = await get_settings()
     banks = settings.get("banks", {})
     pay_code = callback.data.replace("data_pay_", "")
-    bank_info = banks.get(pay_code, {"name": "Aymen Nesredin Redi", "number": "000000"})
+    bank_info = banks.get(pay_code, {"name": pay_code.upper(), "owner": "Admin", "number": "000000"})
     
     data = await state.get_data()
     data_phone = data.get("data_phone")
@@ -1183,9 +1505,9 @@ async def process_data_payment_info(callback: types.CallbackQuery, state: FSMCon
         "🌐 <b>Monthly Unlimited Data (30 Days)</b>\n"
         f"📱 Recipient Phone: <b>{data_phone}</b>\n"
         f"💰 Amount to pay: <b>1,576.00 ETB</b>\n\n"
-        f"🏛 <b>{pay_code.upper()} Payment Info</b>\n\n"
+        f"🏛 <b>{bank_info.get('name')} Payment Info</b>\n\n"
         f"Number/Account: <b>{bank_info.get('number')}</b>\n"
-        f"Name: <b>{bank_info.get('name')}</b>\n\n"
+        f"Name: <b>{bank_info.get('owner')}</b>\n\n"
         "Send the exact 1,576.00 ETB amount, then upload a clear receipt screenshot.\n"
         "ትክክለኛውን 1,576.00 ETB ከፍለው ግልጽ የክፍያ ደረሰኝ ስክሪንሾት ይላኩ፦"
     )
@@ -1233,14 +1555,21 @@ async def process_data_proof_photo(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# ✨ GEMINI PRO 18M WORKFLOW (FULL DESCRIPTIONS)
+# ✨ GEMINI PRO 18M WORKFLOW
 # ==========================================
 @dp.callback_query(F.data == "gemini_pro")
 async def start_gemini_pro(callback: types.CallbackQuery, state: FSMContext):
+    settings = await get_settings()
+    stock = settings.get("stocks", {}).get("gemini_pro", 0)
+    
+    if stock <= 0:
+        await callback.answer("⚠️ ይቅርታ! በአሁኑ ሰዓት Gemini Pro stock አልቋል (Out of stock)።", show_alert=True)
+        return
+
     text = (
         "✨ <b>Gemini Pro 18m</b>\n\n"
         "🏷 <b>Price:</b> 350.00 ETB each\n"
-        "🔥 <b>In stock:</b> 34\n\n"
+        f"🔥 <b>In stock:</b> <b>{stock} pcs</b>\n\n"
         "📄 <b>DESCRIPTION:</b>\n"
         "You will receive a self-activation link that you can claim yourself. It works with both new and existing Gmail accounts.\n\n"
         "✨ <b>FEATURES:</b>\n"
@@ -1260,18 +1589,24 @@ async def start_gemini_pro(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "buy_gemini_now")
 async def select_gemini_payment_method(callback: types.CallbackQuery, state: FSMContext):
+    settings = await get_settings()
+    banks = settings.get("banks", {})
+    buttons = []
+    row = []
+    for b_key, b_info in banks.items():
+        row.append(InlineKeyboardButton(text=f"🏛 {b_info.get('name')}", callback_data=f"gem_pay_{b_key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row: buttons.append(row)
+    buttons.append([InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")])
+
     text = (
         "✨ <b>Gemini Pro 18m — 350.00 ETB</b>\n\n"
         "እባክዎ ክፍያ የሚፈጽሙበትን የባንክ/ቴሌብር መንገድ ይምረጡ፦"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 Telebirr", callback_data="gem_pay_telebirr"), InlineKeyboardButton(text="🏦 CBE (ንግድ ባንክ)", callback_data="gem_pay_cbe")],
-        [InlineKeyboardButton(text="🏦 COOP Bank", callback_data="gem_pay_coop"), InlineKeyboardButton(text="🦁 Awash Bank", callback_data="gem_pay_awash")],
-        [InlineKeyboardButton(text="🏛 Abyssinia", callback_data="gem_pay_abyssinia"), InlineKeyboardButton(text="🔷 Dashen Bank", callback_data="gem_pay_dashen")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
     await state.set_state(GeminiProState.waiting_for_payment_method)
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
 
 @dp.callback_query(GeminiProState.waiting_for_payment_method, F.data.startswith("gem_pay_"))
@@ -1279,14 +1614,14 @@ async def process_gemini_payment_info(callback: types.CallbackQuery, state: FSMC
     settings = await get_settings()
     banks = settings.get("banks", {})
     pay_code = callback.data.replace("gem_pay_", "")
-    bank_info = banks.get(pay_code, {"name": "Aymen Nesredin Redi", "number": "000000"})
+    bank_info = banks.get(pay_code, {"name": pay_code.upper(), "owner": "Admin", "number": "000000"})
     
     text = (
         "✨ <b>Gemini Pro 18m Activation Link</b>\n"
         "💰 Amount to pay: <b>350.00 ETB</b>\n\n"
-        f"🏛 <b>{pay_code.upper()} Payment Info</b>\n\n"
+        f"🏛 <b>{bank_info.get('name')} Payment Info</b>\n\n"
         f"Number/Account: <b>{bank_info.get('number')}</b>\n"
-        f"Name: <b>{bank_info.get('name')}</b>\n\n"
+        f"Name: <b>{bank_info.get('owner')}</b>\n\n"
         "Send the exact 350.00 ETB amount, then upload a clear receipt screenshot.\n"
         "ትክክለኛውን 350.00 ETB ከፍለው ግልጽ የክፍያ ደረሰኝ ስክሪንሾት ይላኩ፦"
     )
@@ -1331,7 +1666,7 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 🛡 ADMIN APPROVE / REJECT CALLBACKS
+# 🛡 ADMIN APPROVE / REJECT CALLBACKS (AUTO STOCK DEDUCTION)
 # ==========================================
 @dp.callback_query(F.data.startswith("app_"))
 async def admin_approve_order(callback: types.CallbackQuery):
@@ -1342,6 +1677,27 @@ async def admin_approve_order(callback: types.CallbackQuery):
         
     parts = callback.data.split("_")
     ord_key, user_id = parts[1], int(parts[2])
+    
+    ord_data = await fb_get(f"orders/{ord_key}") or {}
+    service = ord_data.get("service", "")
+    
+    # Auto Stock Deductions
+    settings = await get_settings()
+    stocks = settings.get("stocks", {})
+    
+    if "Buy USDT" in service:
+        c_amt = float(ord_data.get("crypto_amount", 0.0))
+        stocks["usdt"] = max(0.0, stocks.get("usdt", 0.0) - c_amt)
+    elif "Sell USDT" in service:
+        pay_amt = float(ord_data.get("amount", 0.0))
+        stocks["etb_reserve"] = max(0.0, stocks.get("etb_reserve", 0.0) - pay_amt)
+    elif "Unlimited Data" in service:
+        stocks["unlimited_data"] = max(0, stocks.get("unlimited_data", 0) - 1)
+    elif "Gemini Pro" in service:
+        stocks["gemini_pro"] = max(0, stocks.get("gemini_pro", 0) - 1)
+        
+    settings["stocks"] = stocks
+    await fb_put("settings", settings)
     
     await fb_put(f"orders/{ord_key}/status", "APPROVED")
     await fb_put(f"user_orders/{user_id}/{ord_key}/status", "APPROVED")
