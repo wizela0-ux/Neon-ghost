@@ -278,7 +278,7 @@ async def cmd_start(message: types.Message):
     await save_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
     welcome_text = (
         f"👋 ሰላም <b>{message.from_user.first_name}</b> እንኳን ደህና መጡ!\n\n"
-        "🇪🇹 <b>YT Store — Ethiopian P2P Marketplace</b>\n"
+        "⚡ <b>Neon Store — Ethiopian P2P Marketplace</b>\n"
         "የኢትዮጵያ P2P ክሪፕቶ እና ዲጂታል እቃዎች ማርኬት\n\n"
         "Choose an option below | ከታች ካሉት አማራጮች ይምረጡ፦"
     )
@@ -2038,4 +2038,4 @@ async def main():
     await asyncio.gather(start_web_server(), dp.start_polling(bot))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.main(main())
