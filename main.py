@@ -155,18 +155,20 @@ def get_all_users_sync_list(users_dict):
     if not users_dict:
         return []
     return list(users_dict.keys())
-
-# Dynamic Banks Keyboard Generator (Strict Name Helper)
+# Dynamic Banks Keyboard Generator (With Custom Emoji Support)
 def build_banks_keyboard(banks_dict: dict, callback_prefix: str) -> InlineKeyboardMarkup:
     buttons = []
     row = []
     for b_key, b_info in banks_dict.items():
         if isinstance(b_info, dict):
             display_name = b_info.get("name") or b_key.upper()
+            # ከ Firebase የባንኩን ኢሞጂ ይወስዳል፤ ካልተገኘ 🏛 ያደርጋል
+            emoji = b_info.get("emoji", "🏛")
         else:
             display_name = str(b_info)
+            emoji = "🏛"
             
-        row.append(InlineKeyboardButton(text=f"🏛 {display_name}", callback_data=f"{callback_prefix}_{b_key}"))
+        row.append(InlineKeyboardButton(text=f"{emoji} {display_name}", callback_data=f"{callback_prefix}_{b_key}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
