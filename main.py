@@ -245,6 +245,7 @@ class SellUSDTState(StatesGroup):
     waiting_for_payout_method = State()
     waiting_for_account_number = State()
     waiting_for_account_name = State()
+    waiting_for_usdt_amount = State()  # 👈 እዚህ ጋር አዲሱ የ USDT መጠን መጠየቂያ ስቴፕ ተጨምሯል!
     waiting_for_deposit_network = State()
     waiting_for_proof = State()
 
@@ -1623,6 +1624,7 @@ async def buy_payment_selected(callback: types.CallbackQuery, state: FSMContext)
     else:
         b_name, b_emoji, b_acc, b_owner = html.escape(str(pay_code).upper()), "🏛", "N/A", "N/A"
     
+    await state.update_data(payment_bank_name=b_name)
     data = await state.get_data()
     amount, total_price = data.get("amount"), data.get("total_price")
 
@@ -1656,11 +1658,12 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
     await asyncio.sleep(2)
     
     amount, total_price, address, network = data.get("amount"), data.get("total_price"), data.get("address"), data.get("network")
+    bank_name = data.get("payment_bank_name", "Bank")
     user = message.from_user
     
     order_data = {
         "user_id": user.id, "user_name": user.full_name, "service": "Buy USDT",
-        "details": f"{amount} USDT to {network}:{address}", "amount": total_price, "crypto_amount": amount,
+        "details": f"{amount} USDT to {network}:{address} via {bank_name}", "amount": total_price, "crypto_amount": amount,
         "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
@@ -1670,7 +1673,7 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
         f"🚨 <b>New BUY USDT Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 User: {html.escape(str(user.full_name))} (@{html.escape(str(user.username if user.username else 'None'))}, ID: <code>{user.id}</code>)\n"
         f"💵 Amount: {amount} USDT\n"
-        f"💰 Pay: {total_price:,.2f} ETB\n"
+        f"💰 Pay: {total_price:,.2f} ETB ({bank_name})\n"
         f"🌐 Network: {html.escape(str(network))}\n"
         f"📍 Address/UID: <code>{html.escape(str(address))}</code>\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
@@ -1696,7 +1699,7 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 🔴 SELL USDT WORKFLOW
+# 🔴 SELL USDT WORKFLOW (FULLY FIXED & COMPLETE)
 # ==========================================
 @dp.callback_query(F.data == "sell_usdt")
 async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
@@ -1714,7 +1717,7 @@ async def start_sell_usdt(callback: types.CallbackQuery, state: FSMContext):
     keyboard = build_banks_keyboard(banks, "payout")
 
     text = (
-        "🔴 <b>Sell USDT — Step 1 of 4 | USDT መሸጥ — ደረጃ 1</b>\n\n"
+        "🔴 <b>Sell USDT — Step 1 of 5 | USDT መሸጥ — ደረጃ 1</b>\n\n"
         f"• Current Sell Rate: <b>1 USDT = {sell_rate} ETB</b>\n"
         f"• Our ETB Budget: <b>{etb_reserve:,.2f} ETB</b> (Max buy: <b>{max_usdt_we_can_buy:.2f} USDT</b>)\n\n"
         "How would you like to receive your ETB payout?\n"
@@ -1740,7 +1743,7 @@ async def select_payout_method(callback: types.CallbackQuery, state: FSMContext)
     await state.update_data(payout_method=method_name, payout_key=pay_key)
     
     text = (
-        f"🔴 <b>Step 2 of 4 — {html.escape(str(method_name))} details | መረጃ ያስገቡ</b>\n\n"
+        f"🔴 <b>Step 2 of 5 — {html.escape(str(method_name))} details | መረጃ ያስገቡ</b>\n\n"
         f"ብር የሚቀበሉበትን የ <b>{html.escape(str(method_name))}</b> ቁጥር ያስገቡ፦"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
@@ -1785,7 +1788,7 @@ async def process_account_number(message: types.Message, state: FSMContext):
 
     await state.update_data(account_num=account_num)
     text = (
-        f"👤 <b>Enter Account Holder Name | የባለቤት ስም ያስገቡ</b>\n\n"
+        f"👤 <b>Step 3 of 5 — Enter Account Holder Name | የባለቤት ስም ያስገቡ</b>\n\n"
         f"በ {html.escape(str(method))} የተመዘገበውን የባለቤቱን ሙሉ ስም ያስገቡ፦"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
@@ -1815,32 +1818,80 @@ async def process_account_name(message: types.Message, state: FSMContext):
         return
 
     await state.update_data(acc_name=acc_name)
-    method, account_num = data.get("payout_method"), data.get("account_num")
     
-    safe_method = html.escape(str(method))
-    safe_account_num = html.escape(str(account_num))
-    safe_acc_name = html.escape(str(acc_name))
-
+    # 🌟 እዚህ ጋር አዲሱ የ USDT መጠን መጠየቂያ ስቴፕ ተጨምሯል!
     text = (
-        "🔴 <b>Step 3 of 4 — Choose USDT deposit method | ደረጃ 3 — USDT ማስገቢያ መንገድ ይምረጡ</b>\n\n"
-        "<b>Your ETB payout destination | የብር መቀበያ መረጃዎ፦</b>\n"
-        f"• Method: {safe_method}\n"
-        f"• Number/Account: <code>{safe_account_num}</code>\n"
-        f"• Name: {safe_acc_name}\n\n"
-        "USDT ለእኛ በምን መንገድ ይልካሉ? (ከታች ይምረጡ)፦"
+        "🔴 <b>Step 4 of 5 — Enter USDT Amount | የ USDT መጠን ያስገቡ</b>\n\n"
+        "እኛን ለመሸጥ (ለማስተላለፍ) የሚፈልጉትን የ <b>USDT መጠን</b> ያስገቡ (ምሳሌ: 10)፦"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔶 Bybit UID", callback_data="deposit_bybit"), InlineKeyboardButton(text="💎 BSC (BEP20)", callback_data="deposit_bep20")],
-        [InlineKeyboardButton(text="🟣 Polygon (USDT)", callback_data="deposit_polygon")],
-        [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
-    ])
-    await state.set_state(SellUSDTState.waiting_for_deposit_network)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
+    await state.set_state(SellUSDTState.waiting_for_usdt_amount)
     if last_msg_id:
         try:
             await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
         except Exception:
             msg = await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
             await state.update_data(last_msg_id=msg.message_id)
+
+@dp.message(SellUSDTState.waiting_for_usdt_amount)
+async def process_sell_usdt_amount(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    last_msg_id = data.get("last_msg_id")
+    sell_rate = data.get("sell_rate", 182.0)
+    max_limit = data.get("max_usdt_buy", 10000.0)
+    try: await message.delete()
+    except Exception: pass
+
+    try:
+        crypto_amount = float(message.text.strip())
+        if crypto_amount < 0.5 or crypto_amount > max_limit:
+            err_text = f"⚠️ እባክዎ ከ 0.5 እስከ {max_limit:.2f} USDT መካከል ያስገቡ፦"
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+            if last_msg_id:
+                try:
+                    await bot.edit_message_text(err_text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb)
+                except Exception:
+                    await message.answer(err_text, reply_markup=kb)
+            return
+
+        total_etb = crypto_amount * sell_rate
+        await state.update_data(crypto_amount=crypto_amount, total_etb=total_etb)
+
+        method, account_num, acc_name = data.get("payout_method"), data.get("account_num"), data.get("acc_name")
+        safe_method = html.escape(str(method))
+        safe_account_num = html.escape(str(account_num))
+        safe_acc_name = html.escape(str(acc_name))
+
+        text = (
+            "🔴 <b>Step 5 of 5 — Choose USDT deposit method | ደረጃ 5 — USDT ማስገቢያ መንገድ ይምረጡ</b>\n\n"
+            f"• Selling Amount: <b>{crypto_amount:.4f} USDT</b>\n"
+            f"• You will receive: <b>{total_etb:,.2f} ETB</b>\n\n"
+            "<b>Your ETB payout destination | የብር መቀበያ መረጃዎ፦</b>\n"
+            f"• Method: {safe_method}\n"
+            f"• Number/Account: <code>{safe_account_num}</code>\n"
+            f"• Name: {safe_acc_name}\n\n"
+            "USDT ለእኛ በምን መንገድ ይልካሉ? (ከታች ይምረጡ)፦"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔶 Bybit UID", callback_data="deposit_bybit"), InlineKeyboardButton(text="💎 BSC (BEP20)", callback_data="deposit_bep20")],
+            [InlineKeyboardButton(text="🟣 Polygon (USDT)", callback_data="deposit_polygon")],
+            [InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]
+        ])
+        await state.set_state(SellUSDTState.waiting_for_deposit_network)
+        if last_msg_id:
+            try:
+                await bot.edit_message_text(text, chat_id=message.chat.id, message_id=last_msg_id, reply_markup=keyboard, parse_mode="HTML")
+            except Exception:
+                msg = await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+                await state.update_data(last_msg_id=msg.message_id)
+
+    except ValueError:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel", callback_data="cancel_order")]])
+        if last_msg_id:
+            try:
+                await bot.edit_message_text("❌ እባክዎ ትክክለኛ የቁጥር መጠን ብቻ ያስገቡ (ለምሳሌ: 10)፦", chat_id=message.chat.id, message_id=last_msg_id, reply_markup=kb)
+            except Exception:
+                await message.answer("❌ እባክዎ ትክክለኛ የቁጥር መጠን ብቻ ያስገቡ (ለምሳሌ: 10)፦", reply_markup=kb)
 
 @dp.callback_query(SellUSDTState.waiting_for_deposit_network, F.data.startswith("deposit_"))
 async def select_deposit_network(callback: types.CallbackQuery, state: FSMContext):
@@ -1855,7 +1906,7 @@ async def select_deposit_network(callback: types.CallbackQuery, state: FSMContex
     await state.update_data(deposit_network=net_name, our_address=our_addr)
     
     text = (
-        f"🔴 <b>Step 4 of 4 — {html.escape(str(net_name))} | ደረጃ 4 — {html.escape(str(net_name))}</b>\n\n"
+        f"🔴 <b>Deposit USDT — {html.escape(str(net_name))}</b>\n\n"
         f"USDT ወደዚህ የእኛ {html.escape(str(net_name))} ይላኩ፦\n\n"
         f"<code>{html.escape(str(our_addr))}</code>\n\n"
         "የላኩበትን ክፍያ ግልጽ ስክሪንሾት ይላኩ፦"
@@ -1879,13 +1930,23 @@ async def process_sell_proof_photo(message: types.Message, state: FSMContext):
             pass
     await asyncio.sleep(2)
     
-    payout_method, account_num, acc_name, deposit_network = data.get("payout_method"), data.get("account_num"), data.get("acc_name"), data.get("deposit_network")
+    payout_method = data.get("payout_method")
+    account_num = data.get("account_num")
+    acc_name = data.get("acc_name")
+    deposit_network = data.get("deposit_network")
+    crypto_amount = data.get("crypto_amount", 0.0)
+    total_etb = data.get("total_etb", 0.0)
     user = message.from_user
     
     order_data = {
-        "user_id": user.id, "user_name": user.full_name, "service": "Sell USDT",
-        "details": f"Payout to {payout_method}:{account_num} ({acc_name}) via {deposit_network}", "amount": 0.0,
-        "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "user_id": user.id, 
+        "user_name": user.full_name, 
+        "service": "Sell USDT",
+        "details": f"Payout to {payout_method}:{account_num} ({acc_name}) via {deposit_network}", 
+        "amount": total_etb, 
+        "crypto_amount": crypto_amount,
+        "status": "PENDING", 
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
     await fb_put(f"user_orders/{user.id}/{ord_key}", order_data)
@@ -1893,6 +1954,8 @@ async def process_sell_proof_photo(message: types.Message, state: FSMContext):
     admin_text = (
         f"🚨 <b>New SELL USDT Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 User: {html.escape(str(user.full_name))} (@{html.escape(str(user.username if user.username else 'None'))}, ID: <code>{user.id}</code>)\n"
+        f"💵 Selling Amount: <b>{crypto_amount:.4f} USDT</b>\n"
+        f"💰 Payout ETB: <b>{total_etb:,.2f} ETB</b>\n"
         f"🌐 Sent via: {html.escape(str(deposit_network))}\n"
         f"💵 Payout Method: {html.escape(str(payout_method))}\n"
         f"📍 Payout Account: <code>{html.escape(str(account_num))}</code>\n"
@@ -2002,6 +2065,7 @@ async def process_premium_payment_method(callback: types.CallbackQuery, state: F
     else:
         b_name, b_emoji, b_acc, b_owner = html.escape(str(pay_code).upper()), "🏛", "N/A", "N/A"
     
+    await state.update_data(payment_bank_name=b_name)
     text = f"{b_emoji} <b>{b_name} Payment Info</b>\nAccount: <b>{b_acc}</b>\nName: <b>{b_owner}</b>\n\nከፍለው ግልጽ የክፍያ ስክሪንሾት ይላኩ፦"
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ Cancel | ሰርዝ", callback_data="cancel_order")]])
     await state.set_state(TelegramPremiumState.waiting_for_proof)
@@ -2023,11 +2087,12 @@ async def process_premium_proof_photo(message: types.Message, state: FSMContext)
     await asyncio.sleep(2)
     
     plan_name, price, target_username = data.get("plan_name"), data.get("price"), data.get("target_username")
+    bank_name = data.get("payment_bank_name", "Bank")
     user = message.from_user
     
     order_data = {
         "user_id": user.id, "user_name": user.full_name, "service": f"Telegram Premium {plan_name}",
-        "details": f"Target: {target_username}", "amount": float(price),
+        "details": f"Target: {target_username} via {bank_name}", "amount": float(price),
         "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
@@ -2036,7 +2101,7 @@ async def process_premium_proof_photo(message: types.Message, state: FSMContext)
     admin_text = (
         f"💎 <b>New Telegram Premium Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 Customer: {html.escape(str(user.full_name))} (@{html.escape(str(user.username if user.username else 'None'))}, ID: <code>{user.id}</code>)\n"
-        f"✈️ Plan: {html.escape(str(plan_name))} | Price: {price:,.2f} ETB\n"
+        f"✈️ Plan: {html.escape(str(plan_name))} | Price: {price:,.2f} ETB ({bank_name})\n"
         f"🎯 Target Account: <b>{html.escape(str(target_username))}</b>\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
@@ -2167,6 +2232,7 @@ async def process_data_payment_info(callback: types.CallbackQuery, state: FSMCon
     else:
         b_name, b_emoji, b_acc, b_owner = html.escape(str(pay_code).upper()), "🏛", "N/A", "N/A"
     
+    await state.update_data(payment_bank_name=b_name)
     data = await state.get_data()
     data_phone = data.get("data_phone")
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
@@ -2202,6 +2268,7 @@ async def process_data_proof_photo(message: types.Message, state: FSMContext):
     await asyncio.sleep(2)
     
     data_phone = data.get("data_phone")
+    bank_name = data.get("payment_bank_name", "Bank")
     user = message.from_user
     
     settings = await get_settings()
@@ -2210,7 +2277,7 @@ async def process_data_proof_photo(message: types.Message, state: FSMContext):
 
     order_data = {
         "user_id": user.id, "user_name": user.full_name, "service": "Monthly Unlimited Data",
-        "details": f"Phone: {data_phone}", "amount": float(data_price),
+        "details": f"Phone: {data_phone} via {bank_name}", "amount": float(data_price),
         "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
@@ -2220,7 +2287,7 @@ async def process_data_proof_photo(message: types.Message, state: FSMContext):
         f"🌐 <b>New Monthly Unlimited Data Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 Customer: {html.escape(str(user.full_name))} (@{html.escape(str(user.username if user.username else 'None'))}, ID: <code>{user.id}</code>)\n"
         f"📱 Target Phone Number: <code>{html.escape(str(data_phone))}</code>\n"
-        f"💵 Price: {data_price:,.2f} ETB\n\n"
+        f"💵 Price: {data_price:,.2f} ETB ({bank_name})\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
     admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -2310,6 +2377,7 @@ async def process_gemini_payment_info(callback: types.CallbackQuery, state: FSMC
     else:
         b_name, b_emoji, b_acc, b_owner = html.escape(str(pay_code).upper()), "🏛", "N/A", "N/A"
     
+    await state.update_data(payment_bank_name=b_name)
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
     gemini_price = prices.get("gemini_pro", 350.0)
 
@@ -2341,6 +2409,7 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
             pass
     await asyncio.sleep(2)
     
+    bank_name = data.get("payment_bank_name", "Bank")
     user = message.from_user
     settings = await get_settings()
     prices = settings.get("product_prices", DEFAULT_SETTINGS["product_prices"])
@@ -2348,7 +2417,7 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
 
     order_data = {
         "user_id": user.id, "user_name": user.full_name, "service": "Gemini Pro 18m",
-        "details": "Self-activation link", "amount": float(gemini_price),
+        "details": f"Self-activation link via {bank_name}", "amount": float(gemini_price),
         "status": "PENDING", "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     ord_key = await fb_post("orders", order_data)
@@ -2357,7 +2426,7 @@ async def process_gemini_proof_photo(message: types.Message, state: FSMContext):
     admin_text = (
         f"✨ <b>New Gemini Pro 18m Order! (#{ord_key[:6]})</b>\n\n"
         f"👤 Customer: {html.escape(str(user.full_name))} (@{html.escape(str(user.username if user.username else 'None'))}, ID: <code>{user.id}</code>)\n"
-        f"💵 Price: {gemini_price:,.2f} ETB\n\n"
+        f"💵 Price: {gemini_price:,.2f} ETB ({bank_name})\n\n"
         "የክፍያ ስክሪንሾት ከታች ተያይዟል፦"
     )
     admin_keyboard = InlineKeyboardMarkup(inline_keyboard=[
