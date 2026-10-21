@@ -338,6 +338,47 @@ async def back_to_main_menu(callback: types.CallbackQuery, state: FSMContext):
 # ==========================================
 # 🚀 QUICK COMMANDS (`/rates`, `/stocks`, `/unblock`)
 # ==========================================
+# ==========================================
+# 🙋‍♂️ HELP & SUPPORT COMMANDS
+# ==========================================
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    settings = await get_settings()
+    working_hours = html.escape(str(settings.get("working_hours", "08:00–22:00 EAT")))
+    
+    help_text = (
+        "⁉️ <b>እርዳታ | Help Menu</b>\n\n"
+        "<b>የሚሰሩ ትዕዛዞች (Commands):</b>\n"
+        "/start — ቦቱን ለመጀመር እና ዋና ማውጫ ለማየት\n"
+        "/rates — የ USDT መግዣ እና መሸጫ ተመኖችን ለማየት\n"
+        "/stocks — ያሉትን ስቶኮች እና ቀሪ ሂሳብ ለማየት\n"
+        "/help — የእርዳታ መመሪያ ለማየት\n"
+        "/support — ከአድሚን ጋር ለመገናኘት\n\n"
+        f"🕒 <b>የስራ ሰዓት:</b> {working_hours}"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 ዋና ማውጫ (Main Menu)", callback_data="main_menu")]
+    ])
+    await message.answer(help_text, reply_markup=keyboard, parse_mode="HTML")
+
+@dp.message(Command("support"))
+async def cmd_support(message: types.Message):
+    settings = await get_settings()
+    working_hours = html.escape(str(settings.get("working_hours", "08:00–22:00 EAT")))
+    
+    support_text = (
+        "⁉️ <b>የደንበኞች አገልግሎት | Customer Support</b>\n\n"
+        "ማንኛውም ጥያቄ፣ አስተያየት ወይም የክፍያ ችግር ካጋጠመዎት ከታች ባሉት አማራጮች አድሚኑን ማናገር ይችላሉ፦\n\n"
+        f"🕒 <b>የስራ ሰዓት:</b> {working_hours}"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📍 በቦቱ ውስጥ ለአድሚን መልእክት መላክ", callback_data="msg_admin_start")],
+        [InlineKeyboardButton(text="💬 ድጋፍ ለማግኘት (Direct DM)", url=f"https://t.me/{SUPPORT_USERNAME.replace('@', '')}")],
+        [InlineKeyboardButton(text="🏠 ዋና ማውጫ (Main Menu)", callback_data="main_menu")]
+    ])
+    await message.answer(support_text, reply_markup=keyboard, parse_mode="HTML")
+
 @dp.message(Command("rates"))
 async def cmd_rates(message: types.Message):
     settings = await get_settings()
